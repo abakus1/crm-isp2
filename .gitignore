@@ -19,3 +19,6 @@ frontend/**/out/
 frontend/**/.env.local
 frontend/**/.turbo
 frontend/**/.swc
+
+# Runtime data
+var/

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Query
 from sqlalchemy.orm import Session
 
 from crm.db.session import get_db
@@ -11,6 +11,7 @@ from crm.users.identity.rbac.dependencies import require
 from crm.prg.schemas import (
     PrgStateOut,
     PrgImportRunIn,
+    PrgImportFileOut,
     PrgLocalPointCreateIn,
     PrgPointOut,
     PrgReconcileRunOut,
@@ -54,18 +55,82 @@ def prg_import_run(
     db: Session = Depends(get_db),
     _me: StaffUser = Depends(require(Action.PRG_IMPORT_RUN)),
 ):
-    # Na tym etapie: “klocek pod adapter”. Realny fetch+delta dojdzie w kolejnym commit.
-    st = PrgService(db).mark_import(mode=payload.mode)
-    db.commit()
-    return PrgStateOut(
-        dataset_version=st.dataset_version,
-        dataset_updated_at=st.dataset_updated_at,
-        last_import_at=st.last_import_at,
-        last_delta_at=st.last_delta_at,
-        last_reconcile_at=st.last_reconcile_at,
-        source_url=st.source_url,
-        checksum=st.checksum,
-    )
+    try:
+        st, _imp, _stats = PrgService(db).run_next_import_from_dir(mode=payload.mode)
+        db.commit()
+        return PrgStateOut(
+            dataset_version=st.dataset_version,
+            dataset_updated_at=st.dataset_updated_at,
+            last_import_at=st.last_import_at,
+            last_delta_at=st.last_delta_at,
+            last_reconcile_at=st.last_reconcile_at,
+            source_url=st.source_url,
+            checksum=st.checksum,
+        )
+    except PrgError as e:
+        db.rollback()
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@router.get(
+    "/imports",
+    response_model=list[PrgImportFileOut],
+)
+def prg_imports_list(
+    db: Session = Depends(get_db),
+    _me: StaffUser = Depends(require(Action.PRG_IMPORT_RUN)),
+):
+    rows = PrgService(db).list_import_files(limit=50)
+    return [
+        PrgImportFileOut(
+            id=int(r.id),
+            filename=str(r.filename),
+            size_bytes=int(r.size_bytes),
+            mode=r.mode,
+            status=r.status,
+            checksum=r.checksum,
+            rows_inserted=int(r.rows_inserted),
+            rows_updated=int(r.rows_updated),
+            error=r.error,
+            imported_at=r.imported_at,
+            created_at=r.created_at,
+            updated_at=r.updated_at,
+        )
+        for r in rows
+    ]
+
+
+@router.post(
+    "/import/upload",
+    response_model=PrgImportFileOut,
+)
+async def prg_import_upload(
+    file: UploadFile = File(...),
+    mode: str = Query(default="delta", description="full|delta"),
+    db: Session = Depends(get_db),
+    _me: StaffUser = Depends(require(Action.PRG_IMPORT_RUN)),
+):
+    try:
+        content = await file.read()
+        imp = PrgService(db).enqueue_file_from_upload(filename=file.filename or "prg.csv", content=content, mode=mode)
+        db.commit()
+        return PrgImportFileOut(
+            id=int(imp.id),
+            filename=str(imp.filename),
+            size_bytes=int(imp.size_bytes),
+            mode=imp.mode,
+            status=imp.status,
+            checksum=imp.checksum,
+            rows_inserted=int(imp.rows_inserted),
+            rows_updated=int(imp.rows_updated),
+            error=imp.error,
+            imported_at=imp.imported_at,
+            created_at=imp.created_at,
+            updated_at=imp.updated_at,
+        )
+    except PrgError as e:
+        db.rollback()
+        raise HTTPException(status_code=400, detail=str(e))
 
 
 @router.post(
@@ -124,76 +189,4 @@ def prg_local_point_create(
 )
 def prg_local_points_list(
     db: Session = Depends(get_db),
-    _me: StaffUser = Depends(require(Action.PRG_LOCAL_POINT_EDIT)),
-):
-    points = PrgService(db).list_local_pending(limit=200)
-    out: list[PrgPointOut] = []
-    for p in points:
-        lon, lat = p.point
-        out.append(
-            PrgPointOut(
-                id=int(p.id),
-                source=p.source,
-                prg_point_id=p.prg_point_id,
-                local_point_id=p.local_point_id,
-                terc=p.terc,
-                simc=p.simc,
-                ulic=p.ulic,
-                no_street=bool(p.no_street),
-                building_no=p.building_no,
-                local_no=p.local_no,
-                lat=float(lat),
-                lon=float(lon),
-                status=p.status,
-                merged_into_id=p.merged_into_id,
-                created_at=p.created_at,
-                updated_at=p.updated_at,
-                resolved_at=p.resolved_at,
-                resolved_by_staff_id=p.resolved_by_staff_id,
-                resolved_by_job=bool(p.resolved_by_job),
-            )
-        )
-    return out
-
-
-@router.post(
-    "/reconcile/run",
-    response_model=PrgReconcileRunOut,
-)
-def prg_reconcile_run(
-    db: Session = Depends(get_db),
-    me: StaffUser = Depends(require(Action.PRG_RECONCILE_RUN)),
-):
-    stats = PrgReconcileService(db).run(actor_staff_id=int(me.id), job=False, distance_m=50.0)
-    db.commit()
-    return PrgReconcileRunOut(
-        matched=stats.matched,
-        queued=stats.queued,
-        scanned_pending=stats.scanned_pending,
-        finished_at=stats.finished_at,
-    )
-
-
-@router.get(
-    "/reconcile/queue",
-    response_model=list[PrgReconcileQueueItemOut],
-)
-def prg_reconcile_queue(
-    db: Session = Depends(get_db),
-    _me: StaffUser = Depends(require(Action.PRG_LOCAL_POINT_APPROVE)),
-):
-    rows = list(
-        db.execute(select(PrgReconcileQueue).where(PrgReconcileQueue.status == "pending").order_by(PrgReconcileQueue.created_at.asc()).limit(200)).scalars()
-    )
-    return [
-        PrgReconcileQueueItemOut(
-            id=int(r.id),
-            local_point_id=int(r.local_point_id),
-            status=r.status,
-            candidates=list(r.candidates or []),
-            created_at=r.created_at,
-            decided_at=r.decided_at,
-            decided_by_staff_id=r.decided_by_staff_id,
-        )
-        for r in rows
-    ]
+    _me: Sta_

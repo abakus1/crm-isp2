@@ -61,7 +61,12 @@ class PrgAddressPoint(Base):
     local_no: Mapped[str | None] = mapped_column(String(32), nullable=True)
     local_no_norm: Mapped[str | None] = mapped_column(String(32), nullable=True)
 
-    # Postgres POINT: (x,y) = (lon,lat)
+    # surowe współrzędne PRG (PUWG 1992 / EPSG:2180)
+    # PRG często daje X/Y w metrach; trzymamy jako int (metry) – wystarczy i jest stabilne do porównań
+    x_1992: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    y_1992: Mapped[int | None] = mapped_column(Integer, nullable=True)
+
+    # Postgres POINT: (x,y) = (lon,lat) -> WGS84 / EPSG:4326
     point: Mapped[tuple[float, float]] = mapped_column(PGPoint(), nullable=False)
 
     note: Mapped[str | None] = mapped_column(Text, nullable=True)
@@ -105,3 +110,27 @@ class PrgReconcileQueue(Base):
     decided_by_staff_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
 
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class PrgImportFile(Base):
+    __tablename__ = "prg_import_files"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+
+    filename: Mapped[str] = mapped_column(Text, nullable=False)
+    size_bytes: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("0"))
+
+    mode: Mapped[str] = mapped_column(String(16), nullable=False)  # full|delta
+    status: Mapped[str] = mapped_column(String(16), nullable=False, server_default=text("'pending'"))  # pending|processing|done|failed|skipped
+
+    checksum: Mapped[str] = mapped_column(String(128), nullable=False)
+
+    rows_inserted: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("0"))
+    rows_updated: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("0"))
+
+    error: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+    imported_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())

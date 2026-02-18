@@ -100,6 +100,12 @@ class Settings:
     smtp_from: str
     smtp_starttls: bool
 
+    # --- PRG (referencyjna baza adresów) ---
+    prg_import_dir: str
+    prg_auto_reconcile: bool
+    prg_reconcile_distance_m: float
+    prg_delete_file_after_import: bool
+
     security_allowlist_ips: str = ""
 
     @property
@@ -231,6 +237,12 @@ def get_settings(project_root: Path | None = None) -> Settings:
         smtp_pass=os.getenv("SMTP_PASS", "").strip(),
         smtp_from=os.getenv("SMTP_FROM", "").strip(),
         smtp_starttls=_is_truthy(os.getenv("SMTP_STARTTLS", "1")),
+
+        # --- PRG ---
+        prg_import_dir=os.getenv("PRG_IMPORT_DIR", "var/prg/imports").strip() or "var/prg/imports",
+        prg_auto_reconcile=_is_truthy(os.getenv("PRG_AUTO_RECONCILE", "1")),
+        prg_reconcile_distance_m=float(os.getenv("PRG_RECONCILE_DISTANCE_M", "50")),
+        prg_delete_file_after_import=_is_truthy(os.getenv("PRG_DELETE_FILE_AFTER_IMPORT", "1")),
     )
 
     _settings_cache[cache_key] = s

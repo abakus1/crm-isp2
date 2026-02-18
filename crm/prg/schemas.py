@@ -20,6 +20,21 @@ class PrgImportRunIn(BaseModel):
     mode: str = Field(default="delta", description="full|delta")
 
 
+class PrgImportFileOut(BaseModel):
+    id: int
+    filename: str
+    size_bytes: int
+    mode: str
+    status: str
+    checksum: str
+    rows_inserted: int
+    rows_updated: int
+    error: Optional[str] = None
+    imported_at: Optional[datetime] = None
+    created_at: datetime
+    updated_at: datetime
+
+
 class PrgLocalPointCreateIn(BaseModel):
     terc: str
     simc: str
