@@ -4,7 +4,9 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useMemo, useState } from "react";
 
-type Item = { label: string; href: string };
+import { usePermissions } from "@/lib/permissions";
+
+type Item = { label: string; href: string; requireAny?: string[] };
 type Section = { label: string; key: string; items: Item[] };
 
 function NavLink({ href, label }: { href: string; label: string }) {
@@ -26,21 +28,22 @@ function NavLink({ href, label }: { href: string; label: string }) {
 
 export function Sidebar() {
   const pathname = usePathname();
+  const perms = usePermissions();
 
-  const sections: Section[] = useMemo(
+  const rawSections: Section[] = useMemo(
     () => [
       {
         label: "Pracownicy",
         key: "staff",
         items: [
-          { label: "Lista pracowników", href: "/staff" },
-          { label: "Dodaj pracownika", href: "/staff/new" },
+          { label: "Lista pracowników", href: "/staff", requireAny: ["staff.list"] },
+          { label: "Dodaj pracownika", href: "/staff/new", requireAny: ["staff.create"] },
         ],
       },
       {
         label: "Umowy",
         key: "contracts",
-        items: [{ label: "Lista (placeholder)", href: "/contracts" }],
+        items: [{ label: "Lista (placeholder)", href: "/contracts", requireAny: ["contracts.read"] }],
       },
       {
         label: "Usługi",
@@ -50,7 +53,7 @@ export function Sidebar() {
       {
         label: "Klienci",
         key: "clients",
-        items: [{ label: "Lista (placeholder)", href: "/clients" }],
+        items: [{ label: "Lista (placeholder)", href: "/clients", requireAny: ["subscribers.read"] }],
       },
       {
         label: "OLT",
@@ -62,11 +65,49 @@ export function Sidebar() {
         key: "networks",
         items: [{ label: "Widok (placeholder)", href: "/networks" }],
       },
+      {
+        label: "Konfiguracja",
+        key: "config",
+        items: [
+          {
+            label: "PRG",
+            href: "/config/prg",
+            requireAny: [
+              "prg.import.run",
+              "prg.local_point.create",
+              "prg.local_point.edit",
+              "prg.local_point.delete",
+              "prg.local_point.approve",
+              "prg.reconcile.run",
+            ],
+          },
+          {
+            label: "Uprawnienia",
+            href: "/permissions",
+            requireAny: ["rbac.roles.list", "rbac.actions.list"],
+          },
+          { label: "Ustawienia", href: "/settings" },
+        ],
+      },
     ],
     []
   );
 
-  // otwieramy sekcję automatycznie, jeśli aktualny path do niej pasuje
+  const sections: Section[] = useMemo(() => {
+    // zanim załadujemy permissions (np. świeży reload) — pokaż bez agresywnego ukrywania
+    if (!perms.loaded || !perms.role) return rawSections;
+
+    const canSee = (it: Item) => {
+      if (!it.requireAny || it.requireAny.length === 0) return true;
+      return perms.hasAny(it.requireAny);
+    };
+
+    return rawSections
+      .map((s) => ({ ...s, items: s.items.filter(canSee) }))
+      .filter((s) => s.items.length > 0);
+  }, [rawSections, perms.loaded, perms.role, perms]);
+
+  // auto-open
   const autoOpenKey = useMemo(() => {
     if (pathname.startsWith("/staff")) return "staff";
     if (pathname.startsWith("/contracts")) return "contracts";
@@ -74,6 +115,7 @@ export function Sidebar() {
     if (pathname.startsWith("/clients")) return "clients";
     if (pathname.startsWith("/olt")) return "olt";
     if (pathname.startsWith("/networks")) return "networks";
+    if (pathname.startsWith("/config") || pathname.startsWith("/permissions") || pathname.startsWith("/settings")) return "config";
     return null;
   }, [pathname]);
 
@@ -84,9 +126,9 @@ export function Sidebar() {
     clients: autoOpenKey === "clients",
     olt: autoOpenKey === "olt",
     networks: autoOpenKey === "networks",
+    config: autoOpenKey === "config",
   }));
 
-  // jeśli wejdziemy w nową sekcję — otwórz ją
   useMemo(() => {
     if (!autoOpenKey) return;
     setOpen((prev) => ({ ...prev, [autoOpenKey]: true }));
@@ -114,9 +156,7 @@ export function Sidebar() {
               className="w-full flex items-center justify-between rounded-md px-3 py-2 text-sm hover:bg-muted/40"
             >
               <span>{s.label}</span>
-              <span className="text-xs text-muted-foreground">
-                {open[s.key] ? "–" : "+"}
-              </span>
+              <span className="text-xs text-muted-foreground">{open[s.key] ? "–" : "+"}</span>
             </button>
 
             {open[s.key] && (
@@ -128,8 +168,6 @@ export function Sidebar() {
             )}
           </div>
         ))}
-
-        <NavLink href="/settings" label="Ustawienia" />
       </nav>
     </aside>
   );

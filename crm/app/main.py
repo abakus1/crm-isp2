@@ -10,6 +10,7 @@ from starlette.responses import JSONResponse
 from crm.shared.request_context import set_request_context
 
 from crm.users.module import register as register_users
+from crm.prg.module import register as register_prg
 
 from crm.app.config import get_settings
 from crm.users.identity.jwt_deps import get_claims
@@ -61,6 +62,7 @@ def create_app() -> FastAPI:
     app = FastAPI(title="CRM ISP", version="0.1")
 
     register_users(app)
+    register_prg(app)
 
     # --- Request context (ip/user-agent/request-id) ---
     @app.middleware("http")

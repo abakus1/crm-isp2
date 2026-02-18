@@ -52,3 +52,11 @@ class Action(str, Enum):
 
     RBAC_ROLE_ACTIONS_READ = "rbac.role_actions.read"
     RBAC_ROLE_ACTIONS_WRITE = "rbac.role_actions.write"
+
+    # PRG (adresy referencyjne)
+    PRG_IMPORT_RUN = "prg.import.run"
+    PRG_LOCAL_POINT_CREATE = "prg.local_point.create"
+    PRG_LOCAL_POINT_EDIT = "prg.local_point.edit"
+    PRG_LOCAL_POINT_DELETE = "prg.local_point.delete"
+    PRG_LOCAL_POINT_APPROVE = "prg.local_point.approve"
+    PRG_RECONCILE_RUN = "prg.reconcile.run"

@@ -11,7 +11,7 @@ from crm.db.models.staff import StaffUser
 from crm.users.identity.rbac.actions import Action
 from crm.users.identity.rbac.dependencies import require
 from crm.users.identity.jwt_deps import get_current_user
-from crm.users.services.rbac.permission_service import list_actions, list_roles
+from crm.users.services.rbac.permission_service import list_actions, list_roles, resolve_staff_actions
 from crm.users.services.rbac.admin_service import (
     get_role_action_codes,
     set_role_actions,
@@ -42,6 +42,11 @@ class RbacRoleActionRow(BaseModel):
 
 
 class RbacRoleActionsPutIn(BaseModel):
+    action_codes: List[str]
+
+
+class RbacMeActionsOut(BaseModel):
+    role: str
     action_codes: List[str]
 
 
@@ -127,3 +132,21 @@ def rbac_role_actions_put(
 
             raise HTTPException(status_code=400, detail=str(e))
         raise
+
+
+@router.get(
+    "/me/actions",
+    response_model=RbacMeActionsOut,
+)
+def rbac_me_actions(
+    db: Session = Depends(get_db),
+    me: StaffUser = Depends(get_current_user),
+):
+    """Return effective permissions for currently logged-in user.
+
+    Used by UI to show/hide menu elements.
+    """
+
+    resolved = resolve_staff_actions(db, staff_user_id=int(me.id), role_code=str(me.role))
+    allowed = sorted([a.code for a in resolved if a.allowed])
+    return RbacMeActionsOut(role=str(me.role), action_codes=allowed)
