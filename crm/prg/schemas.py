@@ -20,6 +20,14 @@ class PrgImportRunIn(BaseModel):
     mode: str = Field(default="delta", description="full|delta")
 
 
+class PrgFetchRunOut(BaseModel):
+    changed: bool
+    filename: Optional[str] = None
+    sha256: Optional[str] = None
+    bytes_downloaded: int
+    message: Optional[str] = None
+
+
 class PrgImportFileOut(BaseModel):
     id: int
     filename: str

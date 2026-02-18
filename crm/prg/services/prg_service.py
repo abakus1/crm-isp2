@@ -8,6 +8,10 @@ import hashlib
 import io
 from pathlib import Path
 import zipfile
+import os
+import tempfile
+import fcntl
+from urllib.request import Request, urlopen
 
 from sqlalchemy import select, text
 from sqlalchemy.dialects.postgresql import insert
@@ -70,6 +74,9 @@ def _puwg1992_to_wgs84(x: float, y: float) -> Tuple[float, float]:
 
 
 class PrgService:
+    # Geoportal PRG (Adres Uniwersalny) – paczka POLSKA.zip
+    DEFAULT_PRG_SOURCE_URL = "https://opendata.geoportal.gov.pl/prg/adresy/adruni/POLSKA.zip"
+
     def __init__(self, db: Session):
         self.db = db
 
@@ -107,6 +114,137 @@ class PrgService:
             p = (project_root / p).resolve()
         p.mkdir(parents=True, exist_ok=True)
         return p
+
+    def _prg_root_dir(self) -> Path:
+        # import_dir: .../var/prg/imports  -> root: .../var/prg
+        import_dir = self.ensure_import_dir()
+        return import_dir.parent
+
+    def _ensure_prg_dirs(self) -> tuple[Path, Path, Path]:
+        root = self._prg_root_dir()
+        state_dir = (root / "state")
+        locks_dir = (root / "locks")
+        state_dir.mkdir(parents=True, exist_ok=True)
+        locks_dir.mkdir(parents=True, exist_ok=True)
+        return root, state_dir, locks_dir
+
+    def _acquire_fetch_lock(self) -> tuple[Path, Any]:
+        """
+        Twardy lock na pliku (fcntl.flock) – blokuje równoległy fetch:
+        UI, cron, ręczne odpalenie… wszystko.
+        """
+        _, _, locks_dir = self._ensure_prg_dirs()
+        lock_path = locks_dir / "prg_fetch.lock"
+        fp = lock_path.open("a+", encoding="utf-8")
+        try:
+            fcntl.flock(fp.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            fp.seek(0)
+            meta = fp.read().strip()
+            fp.close()
+            msg = "Pobieranie PRG już trwa (lock zajęty)."
+            if meta:
+                msg += f" {meta}"
+            raise PrgError(msg)
+
+        # zapisz meta
+        fp.seek(0)
+        fp.truncate(0)
+        fp.write(f"pid={os.getpid()} started_at={datetime.now(timezone.utc).isoformat(timespec='seconds')}\n")
+        fp.flush()
+
+        return lock_path, fp
+
+    def _release_fetch_lock(self, fp: Any) -> None:
+        try:
+            fcntl.flock(fp.fileno(), fcntl.LOCK_UN)
+        finally:
+            fp.close()
+
+    # -------------------------
+    # Fetch PRG (python, no .sh)
+    # -------------------------
+    def fetch_geoportal_zip(self) -> Dict[str, Any]:
+        """
+        Pobiera POLSKA.zip do katalogu importu (var/prg/imports -> symlink -> /var/prg/imports).
+        Zabezpieczenie: lock file, żeby nie odpalić 2x równolegle.
+
+        Źródło:
+          env PRG_SOURCE_URL albo default geoportal URL.
+        """
+        source_url = (os.getenv("PRG_SOURCE_URL") or "").strip() or self.DEFAULT_PRG_SOURCE_URL
+
+        import_dir = self.ensure_import_dir()
+        _, state_dir, _locks_dir = self._ensure_prg_dirs()
+        sha_path = state_dir / "last.sha256"
+
+        old_sha = sha_path.read_text(encoding="utf-8").strip() if sha_path.exists() else None
+
+        lock_path, fp = self._acquire_fetch_lock()
+        try:
+            ts = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+            tmp_dir = Path(tempfile.mkdtemp(prefix="prg_fetch_", dir=str(state_dir)))
+            tmp_zip = tmp_dir / f"POLSKA__{ts}.zip"
+
+            # download streaming
+            req = Request(source_url, headers={"User-Agent": "crm-isp2-prg-fetch/1.0"})
+            bytes_dl = 0
+            with urlopen(req, timeout=300) as resp:
+                with tmp_zip.open("wb") as f:
+                    while True:
+                        chunk = resp.read(1024 * 1024)
+                        if not chunk:
+                            break
+                        f.write(chunk)
+                        bytes_dl += len(chunk)
+
+            # sha256
+            h = hashlib.sha256()
+            with tmp_zip.open("rb") as f:
+                for chunk in iter(lambda: f.read(1024 * 1024), b""):
+                    h.update(chunk)
+            new_sha = h.hexdigest()
+
+            # zapis sha (stan)
+            sha_path.write_text(new_sha + "\n", encoding="utf-8")
+
+            changed = (old_sha != new_sha)
+
+            filename = None
+            if changed:
+                filename = f"{ts}__POLSKA.zip"
+                dest = import_dir / filename
+
+                # atomic replace
+                tmp_dest = dest.with_suffix(dest.suffix + ".tmp")
+                if tmp_dest.exists():
+                    tmp_dest.unlink()
+                tmp_zip.replace(tmp_dest)
+                os.replace(str(tmp_dest), str(dest))
+
+                msg = f"Pobrano nową paczkę PRG: {filename} (sha256={new_sha[:12]}…, {bytes_dl} B)."
+            else:
+                msg = f"Brak zmian w PRG (sha256 bez zmian). Pobrano {bytes_dl} B i odrzucono."
+
+            # cleanup tmp_dir
+            try:
+                for p in tmp_dir.iterdir():
+                    p.unlink(missing_ok=True)
+                tmp_dir.rmdir()
+            except Exception:
+                pass
+
+            return {
+                "changed": bool(changed),
+                "filename": filename,
+                "sha256": new_sha,
+                "bytes_downloaded": int(bytes_dl),
+                "message": msg,
+                "source_url": source_url,
+                "lock": str(lock_path),
+            }
+        finally:
+            self._release_fetch_lock(fp)
 
     def list_import_files(self, limit: int = 50) -> List[PrgImportFile]:
         return list(
@@ -303,7 +441,6 @@ class PrgService:
                 text("CREATE TEMP TABLE IF NOT EXISTS prg_stage_ids (prg_point_id text primary key) ON COMMIT DROP")
             )
 
-        # możliwe nazwy kolumn (znormalizowane)
         ID_KEYS = ["prg_point_id", "id", "idpunktu", "auid", "id_punktu", "id_adres"]
         TERC_KEYS = ["terc", "kod_terc", "teryt_gmina", "gmina_terc"]
         SIMC_KEYS = ["simc", "kod_simc", "miejscowosc_simc"]
@@ -313,11 +450,9 @@ class PrgService:
         BUILD_KEYS = ["building_no", "nr_domu", "numer_porzadkowy", "nrporz", "nr_budynku", "numer"]
         LOCAL_KEYS = ["local_no", "nr_lokalu", "lokal", "nr_lok", "nr_mieszkania"]
 
-        # WGS84
         LAT_KEYS = ["lat", "latitude"]
         LON_KEYS = ["lon", "lng", "longitude"]
 
-        # PUWG1992 (EPSG:2180) — PRG “Adres Uniwersalny”
         X92_KEYS = ["x", "x_1992", "x_puwg1992", "wsp_x", "x1992"]
         Y92_KEYS = ["y", "y_1992", "y_puwg1992", "wsp_y", "y1992"]
 
@@ -416,7 +551,6 @@ class PrgService:
             if no_street:
                 ulic = None
 
-            # --- współrzędne ---
             lat_v = _get_any(row, LAT_KEYS)
             lon_v = _get_any(row, LON_KEYS)
 
@@ -434,7 +568,6 @@ class PrgService:
                 y_1992 = _to_int(y_v)
                 lon, lat = _puwg1992_to_wgs84(float(x_1992), float(y_1992))
             else:
-                # bez współrzędnych punkt nie ma sensu
                 continue
 
             exists = exists_cache.get(prg_point_id)
@@ -474,7 +607,6 @@ class PrgService:
             if len(batch) >= 2000:
                 flush_batch()
 
-        # UWAGA: dobijamy cache dla ostatniego chunka zanim kończymy (ważne przy inserted/updated)
         if chunk_keys:
             refresh_exists_cache(chunk_keys)
 
@@ -518,39 +650,23 @@ class PrgService:
         if not b_norm:
             raise PrgError("Nieprawidłowy numer budynku.")
 
-        q = select(PrgAddressPoint).where(
-            PrgAddressPoint.source == "PRG_LOCAL_PENDING",
-            PrgAddressPoint.terc == terc,
-            PrgAddressPoint.simc == simc,
-            PrgAddressPoint.ulic.is_(None) if ulic is None else PrgAddressPoint.ulic == ulic,
-            PrgAddressPoint.building_no_norm == b_norm,
-        )
-        if l_norm is None:
-            q = q.where(PrgAddressPoint.local_no_norm.is_(None))
-        else:
-            q = q.where(PrgAddressPoint.local_no_norm == l_norm)
-
-        exists = self.db.execute(q.limit(1)).scalar_one_or_none()
-        if exists:
-            raise PrgError("Taki lokalny punkt już istnieje (po normalizacji numeru).")
-
         p = PrgAddressPoint(
-            source="PRG_LOCAL_PENDING",
+            source="PRG_LOCAL",
             prg_point_id=None,
             local_point_id=str(uuid.uuid4()),
-            terc=terc,
-            simc=simc,
-            ulic=ulic,
+            terc=terc.strip(),
+            simc=simc.strip(),
+            ulic=ulic.strip() if isinstance(ulic, str) and ulic.strip() else None,
             no_street=bool(no_street),
-            building_no=str(building_no).strip(),
+            building_no=building_no.strip(),
             building_no_norm=b_norm,
-            local_no=str(local_no).strip() if local_no else None,
+            local_no=local_no.strip() if isinstance(local_no, str) and local_no.strip() else None,
             local_no_norm=l_norm,
             x_1992=None,
             y_1992=None,
             point=(float(lon), float(lat)),
-            note=note,
-            status="active",
+            note=note.strip() if isinstance(note, str) and note.strip() else None,
+            status="pending",
         )
         self.db.add(p)
         self.db.flush()
@@ -560,7 +676,8 @@ class PrgService:
         return list(
             self.db.execute(
                 select(PrgAddressPoint)
-                .where(PrgAddressPoint.source == "PRG_LOCAL_PENDING", PrgAddressPoint.status == "active")
+                .where(PrgAddressPoint.source == "PRG_LOCAL")
+                .where(PrgAddressPoint.status == "pending")
                 .order_by(PrgAddressPoint.created_at.desc())
                 .limit(limit)
             ).scalars()
