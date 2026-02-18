@@ -1,26 +1,372 @@
 @import "tailwindcss";
 
+/* =========================================================
+   CRM Web — Modern Light Theme (foundation)
+   - neutral, clean, readable
+   - good focus rings (accessibility)
+   - subtle borders & shadows
+   - safe defaults for forms & tables
+   ========================================================= */
+
+/* ---------- Design tokens (Light) ---------- */
 :root {
-  --background: #ffffff;
-  --foreground: #171717;
+  /* Base */
+  --bg: 255 255 255;              /* page */
+  --fg: 17 24 39;                 /* text (slate-900) */
+  --muted: 75 85 99;              /* text muted (slate-600) */
+
+  /* Surfaces */
+  --surface: 255 255 255;         /* cards */
+  --surface-2: 248 250 252;       /* subtle sections (slate-50) */
+  --surface-3: 241 245 249;       /* table/header strips (slate-100) */
+
+  /* Borders / rings */
+  --border: 226 232 240;          /* slate-200 */
+  --border-strong: 203 213 225;   /* slate-300 */
+  --ring: 59 130 246;             /* blue-500 */
+
+  /* Brand / actions */
+  --primary: 37 99 235;           /* blue-600 */
+  --primary-700: 29 78 216;       /* blue-700 */
+  --primary-foreground: 255 255 255;
+
+  /* States */
+  --success: 22 163 74;           /* green-600 */
+  --warning: 245 158 11;          /* amber-500 */
+  --danger: 220 38 38;            /* red-600 */
+
+  /* Radii / shadows */
+  --radius-sm: 10px;
+  --radius-md: 14px;
+  --radius-lg: 18px;
+
+  --shadow-sm: 0 1px 2px rgb(0 0 0 / 0.05);
+  --shadow-md: 0 8px 24px rgb(15 23 42 / 0.08);
+  --shadow-lg: 0 18px 50px rgb(15 23 42 / 0.12);
+
+  /* Spacing + motion */
+  --container: 1200px;
+  --ease: cubic-bezier(.2,.8,.2,1);
+  --dur: 180ms;
 }
 
+/* Tailwind v4 theme bridge (optional, but nice) */
 @theme inline {
-  --color-background: var(--background);
-  --color-foreground: var(--foreground);
-  --font-sans: var(--font-geist-sans);
-  --font-mono: var(--font-geist-mono);
+  --color-background: rgb(var(--bg));
+  --color-foreground: rgb(var(--fg));
+  --color-muted: rgb(var(--muted));
+  --color-border: rgb(var(--border));
+  --color-ring: rgb(var(--ring));
+  --color-primary: rgb(var(--primary));
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
-  }
+/* ---------- Base reset / smoothing ---------- */
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html {
+  color-scheme: light;
+  text-size-adjust: 100%;
+  -webkit-text-size-adjust: 100%;
 }
 
 body {
-  background: var(--background);
-  color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+  margin: 0;
+  min-height: 100dvh;
+  background: rgb(var(--bg));
+  color: rgb(var(--fg));
+  font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, Arial, "Noto Sans", "Apple Color Emoji", "Segoe UI Emoji";
+  line-height: 1.5;
+  letter-spacing: -0.01em;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+/* Subtle background grid for “modern SaaS” feel (very light) */
+body::before {
+  content: "";
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  background:
+    radial-gradient(1200px 600px at 15% -10%, rgb(37 99 235 / 0.10), transparent 60%),
+    radial-gradient(900px 500px at 85% -20%, rgb(59 130 246 / 0.08), transparent 55%),
+    linear-gradient(to bottom, rgb(248 250 252 / 0.7), transparent 220px);
+  z-index: 0;
+}
+
+body > * {
+  position: relative;
+  z-index: 1;
+}
+
+/* ---------- Typography defaults ---------- */
+h1, h2, h3, h4, h5, h6 {
+  margin: 0 0 0.6rem 0;
+  letter-spacing: -0.02em;
+}
+
+p {
+  margin: 0 0 1rem 0;
+  color: rgb(var(--fg));
+}
+
+small {
+  color: rgb(var(--muted));
+}
+
+a {
+  color: rgb(var(--primary));
+  text-decoration: none;
+  transition: color var(--dur) var(--ease), opacity var(--dur) var(--ease);
+}
+a:hover { color: rgb(var(--primary-700)); }
+a:active { opacity: 0.85; }
+
+/* ---------- Focus / selection (accessibility) ---------- */
+:focus-visible {
+  outline: 3px solid rgb(var(--ring) / 0.35);
+  outline-offset: 2px;
+  border-radius: 10px;
+}
+
+::selection {
+  background: rgb(var(--primary) / 0.18);
+}
+
+/* ---------- Containers ---------- */
+.container-app {
+  max-width: var(--container);
+  margin: 0 auto;
+  padding: 24px;
+}
+
+/* ---------- Card / panel primitives (for shared UI) ---------- */
+.ui-card {
+  background: rgb(var(--surface));
+  border: 1px solid rgb(var(--border));
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-sm);
+}
+
+.ui-card--elevated {
+  box-shadow: var(--shadow-md);
+}
+
+.ui-panel {
+  background: rgb(var(--surface-2));
+  border: 1px solid rgb(var(--border));
+  border-radius: var(--radius-lg);
+}
+
+/* ---------- Buttons (baseline) ---------- */
+.ui-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  height: 44px;
+  padding: 0 14px;
+  border-radius: 14px;
+  border: 1px solid rgb(var(--border));
+  background: rgb(var(--surface));
+  color: rgb(var(--fg));
+  font-weight: 600;
+  font-size: 14px;
+  box-shadow: var(--shadow-sm);
+  transition: transform var(--dur) var(--ease),
+              box-shadow var(--dur) var(--ease),
+              background var(--dur) var(--ease),
+              border-color var(--dur) var(--ease);
+}
+
+.ui-btn:hover {
+  background: rgb(var(--surface-2));
+  border-color: rgb(var(--border-strong));
+  box-shadow: var(--shadow-md);
+}
+
+.ui-btn:active { transform: translateY(1px); }
+
+.ui-btn--primary {
+  background: rgb(var(--primary));
+  color: rgb(var(--primary-foreground));
+  border-color: rgb(var(--primary));
+  box-shadow: 0 10px 24px rgb(37 99 235 / 0.25);
+}
+
+.ui-btn--primary:hover {
+  background: rgb(var(--primary-700));
+  border-color: rgb(var(--primary-700));
+}
+
+.ui-btn--danger {
+  background: rgb(var(--danger));
+  color: #fff;
+  border-color: rgb(var(--danger));
+}
+
+.ui-btn:disabled,
+.ui-btn[aria-disabled="true"] {
+  opacity: 0.55;
+  cursor: not-allowed;
+  transform: none;
+  box-shadow: var(--shadow-sm);
+}
+
+/* ---------- Inputs / forms ---------- */
+input, select, textarea {
+  font: inherit;
+  color: inherit;
+}
+
+.ui-input,
+.ui-select,
+.ui-textarea {
+  width: 100%;
+  border-radius: 14px;
+  border: 1px solid rgb(var(--border));
+  background: rgb(var(--surface));
+  padding: 10px 12px;
+  font-size: 14px;
+  box-shadow: var(--shadow-sm);
+  transition: border-color var(--dur) var(--ease),
+              box-shadow var(--dur) var(--ease),
+              background var(--dur) var(--ease);
+}
+
+.ui-input:focus,
+.ui-select:focus,
+.ui-textarea:focus {
+  outline: none;
+  border-color: rgb(var(--ring) / 0.6);
+  box-shadow: 0 0 0 4px rgb(var(--ring) / 0.18), var(--shadow-sm);
+}
+
+.ui-input::placeholder,
+.ui-textarea::placeholder {
+  color: rgb(var(--muted) / 0.75);
+}
+
+.ui-label {
+  display: block;
+  font-size: 13px;
+  font-weight: 600;
+  color: rgb(var(--fg));
+  margin-bottom: 6px;
+}
+
+.ui-help {
+  font-size: 12px;
+  color: rgb(var(--muted));
+  margin-top: 6px;
+}
+
+/* ---------- Tables ---------- */
+.ui-table {
+  width: 100%;
+  border-collapse: separate;
+  border-spacing: 0;
+  overflow: hidden;
+  border: 1px solid rgb(var(--border));
+  border-radius: var(--radius-lg);
+  background: rgb(var(--surface));
+  box-shadow: var(--shadow-sm);
+}
+
+.ui-table thead th {
+  text-align: left;
+  font-size: 12px;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+  color: rgb(var(--muted));
+  background: rgb(var(--surface-3));
+  padding: 12px 14px;
+  border-bottom: 1px solid rgb(var(--border));
+}
+
+.ui-table tbody td {
+  padding: 12px 14px;
+  border-bottom: 1px solid rgb(var(--border));
+  font-size: 14px;
+}
+
+.ui-table tbody tr:hover td {
+  background: rgb(var(--surface-2));
+}
+
+.ui-table tbody tr:last-child td {
+  border-bottom: 0;
+}
+
+/* ---------- Badges ---------- */
+.ui-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 10px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 700;
+  border: 1px solid rgb(var(--border));
+  background: rgb(var(--surface-2));
+  color: rgb(var(--fg));
+}
+
+.ui-badge--success {
+  background: rgb(22 163 74 / 0.10);
+  border-color: rgb(22 163 74 / 0.25);
+  color: rgb(22 163 74);
+}
+
+.ui-badge--warning {
+  background: rgb(245 158 11 / 0.12);
+  border-color: rgb(245 158 11 / 0.28);
+  color: rgb(161 98 7);
+}
+
+.ui-badge--danger {
+  background: rgb(220 38 38 / 0.10);
+  border-color: rgb(220 38 38 / 0.25);
+  color: rgb(185 28 28);
+}
+
+/* ---------- Scrollbars (subtle) ---------- */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: rgb(203 213 225) transparent;
+}
+
+*::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+
+*::-webkit-scrollbar-thumb {
+  background: rgb(203 213 225);
+  border-radius: 999px;
+  border: 3px solid transparent;
+  background-clip: content-box;
+}
+
+*::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+/* ---------- Utilities (handy for layout) ---------- */
+.ui-divider {
+  height: 1px;
+  width: 100%;
+  background: rgb(var(--border));
+}
+
+.ui-muted {
+  color: rgb(var(--muted));
+}
+
+.ui-shadow {
+  box-shadow: var(--shadow-md);
 }
