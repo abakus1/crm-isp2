@@ -1,73 +1,189 @@
-# CRM-ISP (CRM GEMINI)
+# CRM-ISP2 (CRM GEMINI) — Modularny CRM ISP
 
-Kanoniczna struktura projektu jest schodkowa i wymusza kierunek zależności:
+**crm-isp2** to nowa generacja naszego CRM.  
+Zmiana nie dotyczy tylko kodu — zmieniamy **strukturę i podejście architektoniczne**.
 
-api → services → domains → db
-adapters = integracje na brzegu (Optima, bank, RADIUS, GPON, Asterisk, AVIOS)
+System jest budowany jako **modułowy monolit**, gdzie każdy element (bounded context) ma swój własny katalog i trzyma swoje części razem:
+- API
+- serwisy (use-case)
+- logikę domenową
+- kontrakty (schemas)
+- zależności bezpieczeństwa (RBAC / identity)
 
-Zasady:
-- Brak logiki biznesowej w endpointach (api) i w modelach ORM.
-- Logika biznesowa wyłącznie w service/use-case + rules w domenach.
-- Domeny nie importują: api, adapters, db.
-- Integracje realizowane wyłącznie przez adapters (na brzegu).
-- Uprawnienia: policies (RBAC + field permissions), egzekwowane w warstwie services.
+Aplikacja główna jedynie rejestruje moduły — nie zna ich wewnętrznej struktury.
 
-## Core modules (bounded contexts)
+Repozytorium: `crm-isp2`  
+Branch główny: `main`
 
-- subscribers: abonenci (person / JDG-CEIDG / company), status operacyjny + accounting_status
-- company: dane operatora/tenant + konfiguracje (rachunki firmowe, ustawienia globalne)
-- staff: pracownicy/IAM (role, dostępy; egzekwowanie przez policies)
-- contracts: umowy + edytor szablonów + aliasy pól + snapshot dokumentu
-- billing: naliczenia/dokumenty wewnętrzne + eksport do Optimy (SoR)
-- payments: wpłaty (kasa gotówka/karta), alokacje do dokumentów, eksport do Optimy
-- inventory: magazyn sprzętu klienta (wejścia/wyjścia/przesunięcia, sztuki SN/MAC, wypożyczenia)
-- support: zgłoszenia + komunikacja z abonentem (panel ↔ staff)
-- scheduling: kalendarz wizyt/terminów (rezerwacje, przydziały, statusy)
-- network: definicje sieci/puli IPv4/IPv6 (DHCP/PPPoE/STATIC, NAT/public/mgmt, VLAN/VRF)
-- assets: infrastruktura ISP (urządzenia, interfejsy, przypięcia do segmentów)
+---
 
-🔐 Security Architecture (IAM Core)
+# 🧠 Główna idea architektury
 
-System posiada wbudowany, warstwowy mechanizm bezpieczeństwa dla staff/admin API:
+1. Każdy moduł jest samowystarczalny.
+2. Moduły nie ingerują w siebie bezpośrednio.
+3. Wspólna infrastruktura znajduje się w `core` i `shared`.
+4. Integracje zewnętrzne są izolowane w `adapters`.
+5. Logika biznesowa nigdy nie trafia do endpointów ani modeli ORM.
 
-1️⃣ Authentication
+To jest fundament pod dalszy rozwój systemu billingowego, provisioningowego i operacyjnego.
 
-JWT (z token_version kill-switch)
+---
 
-TOTP (MFA)
+# 📁 Struktura projektu
 
-Bootstrap mode z kontrolą wygaszenia
+```
+crm-isp2/
+├─ crm/
+│  ├─ app/                # tworzenie aplikacji FastAPI, middleware, private-by-default
+│  ├─ core/               # konfiguracja, DB, security, audit (infrastruktura wspólna)
+│  ├─ db/                 # session + modele ORM + repozytoria
+│  ├─ shared/             # wspólne utilsy, errors, enums, request context
+│  ├─ adapters/           # integracje zewnętrzne (Optima, bank, RADIUS, GPON, Asterisk)
+│  │
+│  ├─ users/              # ✅ Moduł IAM (Identity / Staff / RBAC)
+│  │   ├─ module.py
+│  │   ├─ routes.py
+│  │   ├─ api/
+│  │   ├─ services/
+│  │   └─ identity/
+│  │
+│  ├─ api/                # placeholder pod przyszłe moduły
+│  ├─ domains/            # placeholder pod przyszłe moduły
+│  └─ services/           # placeholder pod przyszłe moduły
+│
+├─ alembic/               # migracje bazy danych
+├─ env/                   # konfiguracja środowiskowa (.env)
+├─ frontend/crm-web/      # frontend (Next.js)
+├─ requirements.txt
+└─ alembic.ini
+```
 
-2️⃣ Throttle & Lockout
+---
 
-Lockout per user (threshold + exponential backoff)
+# ✅ Aktualnie działający moduł: `users`
 
-Lockout per IP (spray protection)
+`crm/users` to pierwszy w pełni działający moduł w nowej architekturze.
 
-Global window time
+Zawiera:
 
-Dane w tabeli crm.auth_throttle
+- Identity (login, bootstrap, self-service)
+- Staff lifecycle
+- RBAC (roles + actions)
+- JWT + token_version (kill-switch)
+- TOTP (MFA)
+- Guardrails administracyjne
 
-3️⃣ Idle Timeout
+Moduł jest rejestrowany w `crm/app/main.py` przez funkcję `register_users(app)`.
 
-staff_users.last_seen_at
+To jest wzorzec dla wszystkich kolejnych modułów.
 
-Weryfikacja bezczynności w jwt_deps
+---
 
-Wygaszenie sesji bez unieważniania tokenu globalnie
+# 🧱 Jak dodawać nowy moduł
 
-4️⃣ Token Revocation
+Nowy moduł powinien mieć strukturę podobną do:
 
-token_version w JWT
+```
+crm/<module_name>/
+├─ module.py
+├─ routes.py
+├─ api/
+├─ services/
+├─ domain/
+└─ schemas.py
+```
 
-Zmiana version → natychmiastowa invalidacja wszystkich tokenów użytkownika
+W `crm/app/main.py` dopisujemy jedynie:
 
-5️⃣ Private-by-default API
+```python
+from crm.<module_name>.module import register as register_<module_name>
 
-Wszystkie endpointy wymagają Bearer token (poza /identity/login i /health)
+register_<module_name>(app)
+```
 
-6️⃣ IP Allowlist (opcjonalne)
+Bez grzebania w innych częściach systemu.
 
-Globalna allowlista dla staff/admin API
+---
 
-Docelowo zarządzana z panelu ADMIN
+# 🔐 Warstwa bezpieczeństwa
+
+System działa w modelu:
+
+- Private-by-default (wszystkie endpointy wymagają JWT poza `/health` i identity)
+- Obsługa reverse proxy (`X-Forwarded-For`)
+- Allowlist IP (opcjonalnie)
+- Request context (IP, user-agent, request-id)
+- Audit i activity log
+- RBAC z centralnym `require(action)`
+
+---
+
+# 🗄 Baza danych
+
+- PostgreSQL
+- Alembic migrations
+- Role: admin / writer / reader
+- Migracje uruchamiane jako admin
+- Runtime aplikacji jako writer
+- Raporty jako reader
+
+To zapewnia kontrolę dostępu i izolację warstw.
+
+---
+
+# 🚀 Uruchomienie backendu
+
+### 1) Środowisko
+
+```
+python -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt
+```
+
+### 2) Start aplikacji
+
+```
+uvicorn crm.app.main:create_app --factory --reload --host 0.0.0.0 --port 8000
+```
+
+Health check:
+
+```
+GET /health
+```
+
+---
+
+# 🌐 Frontend
+
+```
+cd frontend/crm-web
+npm install
+npm run dev
+```
+
+---
+
+# 🎯 Cel projektu
+
+crm-isp2 to fundament pod:
+
+- Billing engine
+- Integrację z Optimą
+- Provisioning (RADIUS / GPON / Asterisk)
+- OSS-lite network management
+- Modularny rozwój bez chaosu zależności
+
+To nie jest już „zbiór endpointów”.
+To jest kontrolowany, modułowy system operacyjny dla ISP.
+
+---
+
+# Status
+
+- Moduł IAM działa
+- Struktura pod kolejne moduły przygotowana
+- Repo czyste i zsynchronizowane z origin/main
+
+Kolejny krok: migracja pozostałych domen do modelu modułowego.
