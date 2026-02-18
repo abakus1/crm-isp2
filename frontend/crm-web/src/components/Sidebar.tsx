@@ -35,8 +35,6 @@ export function Sidebar() {
         items: [
           { label: "Lista pracowników", href: "/staff" },
           { label: "Dodaj pracownika", href: "/staff/new" },
-          { label: "Uprawnienia", href: "/permissions" },
-          { label: "Ustawienia", href: "/settings" },
         ],
       },
       {
@@ -71,8 +69,6 @@ export function Sidebar() {
   // otwieramy sekcję automatycznie, jeśli aktualny path do niej pasuje
   const autoOpenKey = useMemo(() => {
     if (pathname.startsWith("/staff")) return "staff";
-    if (pathname.startsWith("/permissions")) return "staff";
-    if (pathname.startsWith("/settings")) return "staff";
     if (pathname.startsWith("/contracts")) return "contracts";
     if (pathname.startsWith("/services")) return "services";
     if (pathname.startsWith("/clients")) return "clients";
@@ -132,6 +128,8 @@ export function Sidebar() {
             )}
           </div>
         ))}
+
+        <NavLink href="/settings" label="Ustawienia" />
       </nav>
     </aside>
   );
