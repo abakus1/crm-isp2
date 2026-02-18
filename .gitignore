@@ -1,0 +1,21 @@
+.venv/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.sqlite3
+*.log
+
+# Env files
+env/stack.env
+env/auth.env
+env/secrets.env
+env/mail.env
+
+# Frontend (Next.js)
+frontend/**/node_modules/
+frontend/**/.next/
+frontend/**/out/
+frontend/**/.env.local
+frontend/**/.turbo
+frontend/**/.swc

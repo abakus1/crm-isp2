@@ -1,0 +1,1 @@
+# Shared user-related errors
