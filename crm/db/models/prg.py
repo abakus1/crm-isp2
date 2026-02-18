@@ -1,8 +1,8 @@
 # crm/db/models/prg.py
 from __future__ import annotations
 
-import uuid
 from datetime import datetime
+from typing import Any
 
 from sqlalchemy import (
     Boolean,
@@ -18,6 +18,7 @@ from sqlalchemy.dialects import postgresql
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from crm.db.models.base import Base
+from crm.db.types.pg_point import PGPoint
 
 
 class PrgDatasetState(Base):
@@ -53,7 +54,7 @@ class PrgAddressPoint(Base):
     terc: Mapped[str] = mapped_column(String(8), nullable=False)
     simc: Mapped[str] = mapped_column(String(8), nullable=False)
     ulic: Mapped[str | None] = mapped_column(String(8), nullable=True)
-    no_street: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default="false")
+    no_street: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=text("false"))
 
     building_no: Mapped[str] = mapped_column(String(32), nullable=False)
     building_no_norm: Mapped[str] = mapped_column(String(32), nullable=False)
@@ -61,18 +62,23 @@ class PrgAddressPoint(Base):
     local_no_norm: Mapped[str | None] = mapped_column(String(32), nullable=True)
 
     # Postgres POINT: (x,y) = (lon,lat)
-    point: Mapped[tuple[float, float]] = mapped_column(postgresql.POINT, nullable=False)
+    point: Mapped[tuple[float, float]] = mapped_column(PGPoint(), nullable=False)
 
     note: Mapped[str | None] = mapped_column(Text, nullable=True)
 
-    status: Mapped[str] = mapped_column(String(32), nullable=False, server_default="active")
-    merged_into_id: Mapped[int | None] = mapped_column(ForeignKey(f"{Base.metadata.schema}.prg_address_points.id"), nullable=True)
-    merged_into: Mapped["PrgAddressPoint" | None] = relationship("PrgAddressPoint", remote_side=[id])
+    status: Mapped[str] = mapped_column(String(32), nullable=False, server_default=text("'active'"))
+    merged_into_id: Mapped[int | None] = mapped_column(
+        ForeignKey(f"{Base.metadata.schema}.prg_address_points.id"),
+        nullable=True,
+    )
+
+    # IMPORTANT: no union inside string forward-ref (SQLAlchemy evals this)
+    merged_into: Mapped["PrgAddressPoint"] = relationship("PrgAddressPoint", remote_side=[id])
 
     # reconcile metadata
     resolved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     resolved_by_staff_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
-    resolved_by_job: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default="false")
+    resolved_by_job: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=text("false"))
 
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
@@ -88,8 +94,12 @@ class PrgReconcileQueue(Base):
         nullable=False,
     )
 
-    status: Mapped[str] = mapped_column(String(32), nullable=False, server_default="pending")  # pending|resolved|rejected
-    candidates: Mapped[dict] = mapped_column(postgresql.JSONB, nullable=False, server_default=text("'[]'::jsonb"))
+    status: Mapped[str] = mapped_column(String(32), nullable=False, server_default=text("'pending'"))  # pending|resolved|rejected
+    candidates: Mapped[list[dict[str, Any]]] = mapped_column(
+        postgresql.JSONB,
+        nullable=False,
+        server_default=text("'[]'::jsonb"),
+    )
 
     decided_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     decided_by_staff_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
