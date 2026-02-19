@@ -97,9 +97,17 @@ class PrgService:
         self.db.flush()
         self.db.commit()
 
-    def _job_update(self, job: PrgJob, *, status: Optional[str] = None, stage: Optional[str] = None,
-                    message: Optional[str] = None, meta_patch: Optional[dict[str, Any]] = None,
-                    error: Optional[str] = None, finished: bool = False) -> None:
+    def _job_update(
+        self,
+        job: PrgJob,
+        *,
+        status: Optional[str] = None,
+        stage: Optional[str] = None,
+        message: Optional[str] = None,
+        meta_patch: Optional[dict[str, Any]] = None,
+        error: Optional[str] = None,
+        finished: bool = False,
+    ) -> None:
         if status is not None:
             job.status = status
         if stage is not None:
@@ -228,7 +236,9 @@ class PrgService:
         self.db.flush()
         return st
 
-    def mark_import(self, mode: str, source_url: Optional[str] = None, checksum: Optional[str] = None) -> PrgDatasetState:
+    def mark_import(
+        self, mode: str, source_url: Optional[str] = None, checksum: Optional[str] = None
+    ) -> PrgDatasetState:
         st = self.get_state()
         now = _now()
         st.last_import_at = now
@@ -282,7 +292,6 @@ class PrgService:
         fp.flush()
         return fp, lock_path
 
-
     def _release_lockfile(self, fp: Any, lock_path: Path) -> None:
         try:
             fcntl.flock(fp.fileno(), fcntl.LOCK_UN)
@@ -295,6 +304,7 @@ class PrgService:
         except Exception:
             # nie blokuj joba, jeśli FS ma focha
             pass
+
     # -------------------------
     # FETCH (python) + progress
     # -------------------------
@@ -353,7 +363,7 @@ class PrgService:
                 message="Pobieranie zakończone. Kończę zapis…",
                 meta_patch={"bytes_downloaded": bytes_dl, "bytes_total": total},
             )
-            
+
             h = hashlib.sha256()
             with tmp_zip.open("rb") as f:
                 for chunk in iter(lambda: f.read(1024 * 1024), b""):
@@ -414,7 +424,7 @@ class PrgService:
                     status="success",
                     stage="done",
                     finished=True,
-                    message=f"✅ Pobieranie PRG zakończone — brak zmian (checksum bez zmian).",
+                   message=f"✅ Pobieranie PRG zakończone — brak zmian (checksum bez zmian).",
                     meta_patch={
                         "changed": False,
                         "bytes_downloaded": bytes_dl,
@@ -503,7 +513,7 @@ class PrgService:
             imp.imported_at = _now()
             self.db.add(imp)
 
-            st = self.mark_import(mode=mode, checksum=checksum)
+            self.mark_import(mode=mode, checksum=checksum)
 
             self._job_log(job.id, f"DONE import rows_seen={rows_seen} inserted={inserted} updated={updated} skipped={skipped}")
             self._job_update(job, stage="finalizing", message="Finalizuję i zapisuję wynik…", meta_patch={
@@ -616,6 +626,7 @@ class PrgService:
             if not names:
                 zf.close()
                 raise PrgError("ZIP jest pusty.")
+
             cand = None
             for n in names:
                 if Path(n).suffix.lower() in (".csv", ".tsv", ".txt"):
@@ -658,7 +669,9 @@ class PrgService:
     # -------------------------
     # UPSERT + progress
     # -------------------------
-    def _upsert_official_points_with_progress(self, *, job: PrgJob, rows: Iterable[Dict[str, Any]], mode: str) -> Tuple[int, int, int, int]:
+    def _upsert_official_points_with_progress(
+        self, *, job: PrgJob, rows: Iterable[Dict[str, Any]], mode: str
+    ) -> Tuple[int, int, int, int]:
         inserted = 0
         updated = 0
         skipped = 0
@@ -728,7 +741,10 @@ class PrgService:
             self.db.execute(stmt)
 
             if use_full_deactivate and stage_batch:
-                self.db.execute(text("INSERT INTO prg_stage_ids (prg_point_id) VALUES (:prg_point_id) ON CONFLICT DO NOTHING"), stage_batch)
+                self.db.execute(
+                    text("INSERT INTO prg_stage_ids (prg_point_id) VALUES (:prg_point_id) ON CONFLICT DO NOTHING"),
+                    stage_batch,
+                )
 
             batch = []
             stage_batch = []
@@ -918,7 +934,9 @@ class PrgService:
         self.db.add(p)
         self.db.flush()
 
-        q = self.db.execute(select(PrgReconcileQueue).where(PrgReconcileQueue.local_point_id == int(p.id))).scalar_one_or_none()
+        q = self.db.execute(
+            select(PrgReconcileQueue).where(PrgReconcileQueue.local_point_id == int(p.id))
+        ).scalar_one_or_none()
         if not q:
             self.db.add(PrgReconcileQueue(local_point_id=int(p.id), status="pending"))
             self.db.flush()

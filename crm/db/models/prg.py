@@ -88,6 +88,28 @@ class PrgAddressPoint(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
 
 
+class PrgAdruniBuildingNumber(Base):
+    __tablename__ = "prg_adruni_building_numbers"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+
+    terc: Mapped[str] = mapped_column(String(8), nullable=False)
+    simc: Mapped[str] = mapped_column(String(8), nullable=False)
+    ulic: Mapped[str | None] = mapped_column(String(8), nullable=True)
+
+    place_name: Mapped[str | None] = mapped_column(Text, nullable=True)
+    street_name: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+    building_no: Mapped[str] = mapped_column(String(32), nullable=False)
+    building_no_norm: Mapped[str] = mapped_column(String(32), nullable=False)
+
+    # raw ADRUNI record (pipe-delimited etc.) – source of truth
+    adruni: Mapped[str] = mapped_column(Text, nullable=False)
+
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+
+
 class PrgReconcileQueue(Base):
     __tablename__ = "prg_reconcile_queue"
 
