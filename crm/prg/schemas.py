@@ -1,3 +1,4 @@
+# crm/prg/schemas.py
 from __future__ import annotations
 
 from datetime import datetime
@@ -15,6 +16,7 @@ class PrgStateOut(BaseModel):
     last_reconcile_at: Optional[datetime] = None
     source_url: Optional[str] = None
     checksum: Optional[str] = None
+    address_points_count: int = 0
 
 
 class PrgImportRunIn(BaseModel):
