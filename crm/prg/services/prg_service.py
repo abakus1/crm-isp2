@@ -25,6 +25,7 @@ from crm.db.models.prg import (
     PrgImportFile,
     PrgJob,
     PrgJobLog,
+    PrgReconcileQueue,
 )
 from crm.prg.utils.normalize import normalize_building_no, normalize_local_no
 from crm.prg.services.reconcile_service import PrgReconcileService
@@ -91,8 +92,10 @@ class PrgService:
     # Jobs (live status)
     # -------------------------
     def _job_log(self, job_id: uuid.UUID, line: str, level: str = "info") -> None:
+        # WAŻNE: commit, żeby inne sesje (polling z UI) widziały logi "na żywo".
         self.db.add(PrgJobLog(job_id=job_id, level=level, line=line))
         self.db.flush()
+        self.db.commit()
 
     def _job_update(self, job: PrgJob, *, status: Optional[str] = None, stage: Optional[str] = None,
                     message: Optional[str] = None, meta_patch: Optional[dict[str, Any]] = None,
@@ -114,6 +117,8 @@ class PrgService:
             job.finished_at = _now()
         self.db.add(job)
         self.db.flush()
+        # commit, żeby UI (polling) widziało progres bez czekania na koniec joba
+        self.db.commit()
 
     def start_fetch_job(self, *, actor_staff_id: Optional[int]) -> PrgJob:
         # lock: nie pozwalamy odpalić kolejnego fetch, jeśli jest running
@@ -247,18 +252,19 @@ class PrgService:
         return p
 
     def _prg_root_dir(self) -> Path:
-        import_dir = self.ensure_import_dir()
-        return import_dir.parent
+        # Kanonicznie trzymamy WSZYSTKO przy imporcie w jednym miejscu:
+        # /var/prg/imports  (lub ./var/prg/imports w repo, jeśli taki ENV).
+        # Dzięki temu locki i last.sha256 nie "wędrują" po katalogach projektu.
+        return self.ensure_import_dir()
 
     def _ensure_prg_dirs(self) -> tuple[Path, Path, Path]:
-        root = self._prg_root_dir()
-        state_dir = root / "state"
-        locks_dir = root / "locks"
-        state_dir.mkdir(parents=True, exist_ok=True)
-        locks_dir.mkdir(parents=True, exist_ok=True)
+        root = self._prg_root_dir()  # = import_dir
+        state_dir = root  # last.sha256
+        locks_dir = root  # *.lock
+        root.mkdir(parents=True, exist_ok=True)
         return root, state_dir, locks_dir
 
-    def _acquire_lockfile(self, name: str) -> Any:
+    def _acquire_lockfile(self, name: str) -> tuple[Any, Path]:
         _, _state, locks = self._ensure_prg_dirs()
         lock_path = locks / f"{name}.lock"
         fp = lock_path.open("a+", encoding="utf-8")
@@ -269,23 +275,31 @@ class PrgService:
             meta = fp.read().strip()
             fp.close()
             raise PrgError(f"Proces już działa (lock: {name}). {meta}".strip())
+
         fp.seek(0)
         fp.truncate(0)
         fp.write(f"pid={os.getpid()} started_at={_now().isoformat(timespec='seconds')}\n")
         fp.flush()
-        return fp
+        return fp, lock_path
 
-    def _release_lockfile(self, fp: Any) -> None:
+
+    def _release_lockfile(self, fp: Any, lock_path: Path) -> None:
         try:
             fcntl.flock(fp.fileno(), fcntl.LOCK_UN)
         finally:
             fp.close()
 
+        # sprzątanie: usuń lock file
+        try:
+            lock_path.unlink(missing_ok=True)
+        except Exception:
+            # nie blokuj joba, jeśli FS ma focha
+            pass
     # -------------------------
     # FETCH (python) + progress
     # -------------------------
     def _run_fetch(self, job: PrgJob) -> None:
-        fp_lock = self._acquire_lockfile("prg_fetch")
+        fp_lock, lock_path = self._acquire_lockfile("prg_fetch")
         try:
             import_dir = self.ensure_import_dir()
             _, state_dir, _locks = self._ensure_prg_dirs()
@@ -298,7 +312,9 @@ class PrgService:
             self._job_log(job.id, f"START fetch url={source_url}")
 
             ts = _now().strftime("%Y%m%dT%H%M%SZ")
-            tmp_dir = Path(tempfile.mkdtemp(prefix="prg_fetch_", dir=str(state_dir)))
+            tmp_base = import_dir / ".tmp"
+            tmp_base.mkdir(parents=True, exist_ok=True)
+            tmp_dir = Path(tempfile.mkdtemp(prefix="prg_fetch_", dir=str(tmp_base)))
             tmp_zip = tmp_dir / f"POLSKA__{ts}.zip"
 
             req = Request(source_url, headers={"User-Agent": "crm-isp2-prg-fetch/1.0"})
@@ -374,14 +390,39 @@ class PrgService:
                     self.db.flush()
 
                 self._job_log(job.id, f"SAVED file={filename} sha256={new_sha[:12]}… bytes={bytes_dl}")
-                self._job_update(job, status="success", stage="done", finished=True,
-                                 message=f"Pobrano nową paczkę PRG: {filename}",
-                                 meta_patch={"filename": filename, "bytes_downloaded": bytes_dl, "bytes_total": total, "sha256": new_sha})
+                size_mb = round(bytes_dl / (1024 * 1024), 1)
+                self._job_update(
+                    job,
+                    status="success",
+                    stage="done",
+                    finished=True,
+                    message=f"✅ Pobieranie PRG zakończone — zapisano {filename} ({size_mb} MB).",
+                    meta_patch={
+                        "filename": filename,
+                        "bytes_downloaded": bytes_dl,
+                        "bytes_total": total,
+                        "sha256": new_sha,
+                        "changed": True,
+                        "summary": f"Nowa paczka PRG: {filename} ({size_mb} MB), SHA {new_sha[:12]}…",
+                    },
+                )
             else:
                 self._job_log(job.id, f"NO CHANGE sha256={new_sha[:12]}… bytes={bytes_dl}")
-                self._job_update(job, status="success", stage="done", finished=True,
-                                 message="Brak zmian w PRG (checksum bez zmian).",
-                                 meta_patch={"changed": False, "bytes_downloaded": bytes_dl, "bytes_total": total, "sha256": new_sha})
+                size_mb = round(bytes_dl / (1024 * 1024), 1)
+                self._job_update(
+                    job,
+                    status="success",
+                    stage="done",
+                    finished=True,
+                    message=f"✅ Pobieranie PRG zakończone — brak zmian (checksum bez zmian).",
+                    meta_patch={
+                        "changed": False,
+                        "bytes_downloaded": bytes_dl,
+                        "bytes_total": total,
+                        "sha256": new_sha,
+                        "summary": f"Brak zmian PRG (SHA {new_sha[:12]}…), pobrano {size_mb} MB",
+                    },
+                )
 
             # cleanup tmp
             try:
@@ -392,13 +433,13 @@ class PrgService:
                 pass
 
         finally:
-            self._release_lockfile(fp_lock)
+            self._release_lockfile(fp_lock, lock_path)
 
     # -------------------------
     # IMPORT (stream ZIP) + progress
     # -------------------------
     def _run_import(self, job: PrgJob, *, mode: str) -> None:
-        fp_lock = self._acquire_lockfile("prg_import")
+        fp_lock, lock_path = self._acquire_lockfile("prg_import")
         try:
             settings = get_settings()
             import_dir = self.ensure_import_dir()
@@ -436,7 +477,7 @@ class PrgService:
             self._job_update(job, stage="reading_headers", message="Czytam nagłówki i wykrywam separator…")
 
             # STREAM: nie robimy read_bytes ZIP->RAM; czytamy z dysku
-            rows_iter, total_hint = self._iter_rows_from_file_path(path)
+            rows_iter, total_hint = self._iter_rows_from_file_path(path, job=job)
             # total_hint może być None (ZIP nie daje total łatwo). UI i tak pokaże “rows_seen”.
 
             inserted = updated = skipped = rows_seen = 0
@@ -498,7 +539,7 @@ class PrgService:
 
             self._job_update(job, status="success", stage="done", finished=True, message="Import PRG zakończony ✅")
         finally:
-            self._release_lockfile(fp_lock)
+            self._release_lockfile(fp_lock, lock_path)
 
     def list_import_files(self, limit: int = 50) -> List[PrgImportFile]:
         return list(
@@ -540,10 +581,11 @@ class PrgService:
     # -------------------------
     # STREAM reader (ZIP/CSV)
     # -------------------------
-    def _iter_rows_from_file_path(self, path: Path) -> tuple[Iterable[Dict[str, Any]], Optional[int]]:
+    def _iter_rows_from_file_path(self, path: Path, job: Optional[PrgJob] = None) -> tuple[Iterable[Dict[str, Any]], Optional[int]]:
         """
         Streamuje wiersze z ZIP/CSV bez ładowania całości do RAM.
-        total_hint: None (zwykle), zostawiamy.
+        FIX: dla ZIP NIE robimy seek(0) na ZipExtFile/TextIOWrapper.
+        Robimy sample w pierwszym open, potem reopen do DictReader.
         """
         suffix = path.suffix.lower()
 
@@ -551,6 +593,8 @@ class PrgService:
             reader = csv.DictReader(text_io, delimiter=delimiter)
             if not reader.fieldnames:
                 raise PrgError("Plik PRG nie ma nagłówka.")
+            if job is not None:
+                self._job_log(job.id, f"HEADERS({len(reader.fieldnames)}): {reader.fieldnames[:25]}")
             for row in reader:
                 out: Dict[str, Any] = {}
                 for k, v in row.items():
@@ -558,10 +602,13 @@ class PrgService:
                 yield out
 
         def detect_delimiter(sample: str) -> str:
-            delimiter = ";" if sample.count(";") >= sample.count(",") else ","
-            if sample.count("\t") > max(sample.count(";"), sample.count(",")):
-                delimiter = "\t"
-            return delimiter
+            # prosto i stabilnie
+            semi = sample.count(";")
+            comma = sample.count(",")
+            tab = sample.count("\t")
+            if tab > max(semi, comma):
+                return "\t"
+            return ";" if semi >= comma else ","
 
         if suffix == ".zip":
             zf = zipfile.ZipFile(path)
@@ -577,26 +624,33 @@ class PrgService:
             if not cand:
                 cand = names[0]
 
-            # robimy generator, który sam domknie zipa
+            # 1) SAMPLE (osobne otwarcie)
+            with zf.open(cand) as bf:
+                txt = io.TextIOWrapper(bf, encoding="utf-8-sig", errors="replace", newline="")
+                head = txt.read(4096)
+            delim = detect_delimiter(head)
+            if job is not None:
+                self._job_log(job.id, f"DETECT zip_entry={cand} delimiter={repr(delim)} sample_len={len(head)}")
+
+            # 2) REOPEN do czytania od początku (bez seek)
             def rows() -> Iterable[Dict[str, Any]]:
                 try:
-                    with zf.open(cand) as bf:
-                        txt = io.TextIOWrapper(bf, encoding="utf-8-sig", errors="replace")
-                        head = txt.read(4096)
-                        delim = detect_delimiter(head)
-                        txt.seek(0)
-                        yield from gen_from_textio(txt, delim)
+                    with zf.open(cand) as bf2:
+                        txt2 = io.TextIOWrapper(bf2, encoding="utf-8-sig", errors="replace", newline="")
+                        yield from gen_from_textio(txt2, delim)
                 finally:
                     zf.close()
 
             return rows(), None
 
-        # CSV/TSV/TXT
+        # CSV/TSV/TXT (tu seek jest OK)
         def rows_plain() -> Iterable[Dict[str, Any]]:
             with path.open("r", encoding="utf-8-sig", errors="replace", newline="") as f:
                 head = f.read(4096)
                 delim = detect_delimiter(head)
                 f.seek(0)
+                if job is not None:
+                    self._job_log(job.id, f"DETECT file delimiter={repr(delim)}")
                 yield from gen_from_textio(f, delim)
 
         return rows_plain(), None
@@ -648,145 +702,149 @@ class PrgService:
             nonlocal batch, stage_batch
             if not batch:
                 return
-            self._job_update(job, stage="upserting", message="Upsert batch do DB…")
 
+            # UPSERT:
             stmt = insert(PrgAddressPoint).values(batch)
+            update_cols = {
+                "terc": stmt.excluded.terc,
+                "simc": stmt.excluded.simc,
+                "ulic": stmt.excluded.ulic,
+                "no_street": stmt.excluded.no_street,
+                "building_no": stmt.excluded.building_no,
+                "building_no_norm": stmt.excluded.building_no_norm,
+                "local_no": stmt.excluded.local_no,
+                "local_no_norm": stmt.excluded.local_no_norm,
+                "x_1992": stmt.excluded.x_1992,
+                "y_1992": stmt.excluded.y_1992,
+                "point": stmt.excluded.point,
+                "note": stmt.excluded.note,
+                "status": stmt.excluded.status,
+                "updated_at": _now(),
+            }
             stmt = stmt.on_conflict_do_update(
                 index_elements=[PrgAddressPoint.prg_point_id],
-                set_={
-                    "source": stmt.excluded.source,
-                    "terc": stmt.excluded.terc,
-                    "simc": stmt.excluded.simc,
-                    "ulic": stmt.excluded.ulic,
-                    "no_street": stmt.excluded.no_street,
-                    "building_no": stmt.excluded.building_no,
-                    "building_no_norm": stmt.excluded.building_no_norm,
-                    "local_no": stmt.excluded.local_no,
-                    "local_no_norm": stmt.excluded.local_no_norm,
-                    "x_1992": stmt.excluded.x_1992,
-                    "y_1992": stmt.excluded.y_1992,
-                    "point": stmt.excluded.point,
-                    "status": stmt.excluded.status,
-                    "note": stmt.excluded.note,
-                    "updated_at": text("now()"),
-                },
+                set_=update_cols,
             )
             self.db.execute(stmt)
 
             if use_full_deactivate and stage_batch:
-                self.db.execute(
-                    text("INSERT INTO prg_stage_ids (prg_point_id) VALUES (:prg_point_id) ON CONFLICT DO NOTHING"),
-                    stage_batch,
-                )
-                stage_batch = []
+                self.db.execute(text("INSERT INTO prg_stage_ids (prg_point_id) VALUES (:prg_point_id) ON CONFLICT DO NOTHING"), stage_batch)
 
             batch = []
+            stage_batch = []
 
-        chunk_keys: list[str] = []
         last_progress_at = _now()
+        chunk_keys: list[str] = []
 
         for row in rows:
             rows_seen += 1
 
-            prg_point_id = (_get_any(row, ID_KEYS) or "").strip()
+            prg_point_id = _get_any(row, ID_KEYS)
             if not prg_point_id:
                 skipped += 1
                 continue
+            prg_point_id = str(prg_point_id).strip()
 
-            chunk_keys.append(prg_point_id)
-            if len(chunk_keys) >= 5000:
-                refresh_exists_cache(chunk_keys)
-                chunk_keys = []
-
-            terc = (_get_any(row, TERC_KEYS) or "").strip()
-            simc = (_get_any(row, SIMC_KEYS) or "").strip()
+            terc = _get_any(row, TERC_KEYS)
+            simc = _get_any(row, SIMC_KEYS)
             if not terc or not simc:
                 skipped += 1
                 continue
-
-            building_no = (_get_any(row, BUILD_KEYS) or "").strip()
-            if not building_no:
-                skipped += 1
-                continue
+            terc = str(terc).strip()
+            simc = str(simc).strip()
 
             ulic = _get_any(row, ULIC_KEYS)
-            ulic = ulic.strip() if isinstance(ulic, str) and ulic.strip() else None
+            if ulic is not None:
+                ulic = str(ulic).strip() or None
 
-            local_no = _get_any(row, LOCAL_KEYS)
-            local_no = local_no.strip() if isinstance(local_no, str) and local_no.strip() else None
+            no_street = _is_truthy(_get_any(row, NO_STREET_KEYS) or "0")
 
-            no_street = _is_truthy(_get_any(row, NO_STREET_KEYS) or "")
+            building_no_raw = _get_any(row, BUILD_KEYS)
+            if not building_no_raw:
+                skipped += 1
+                continue
+            building_no = normalize_building_no(str(building_no_raw))
+            building_no_norm = normalize_building_no(str(building_no_raw), normalize=True)
+
+            local_no_raw = _get_any(row, LOCAL_KEYS)
+            local_no = normalize_local_no(str(local_no_raw)) if local_no_raw else None
+            local_no_norm = normalize_local_no(str(local_no_raw), normalize=True) if local_no_raw else None
+
+            lat = _get_any(row, LAT_KEYS)
+            lon = _get_any(row, LON_KEYS)
+            x92 = _get_any(row, X92_KEYS)
+            y92 = _get_any(row, Y92_KEYS)
+
+            x_1992 = y_1992 = None
+            if x92 is not None and y92 is not None:
+                try:
+                    x_1992 = _to_int(x92)
+                    y_1992 = _to_int(y92)
+                except Exception:
+                    x_1992 = y_1992 = None
+
+            # point:
+            if lon is not None and lat is not None:
+                try:
+                    lon_f = _to_float(lon)
+                    lat_f = _to_float(lat)
+                except Exception:
+                    lon_f = lat_f = None  # type: ignore
+            else:
+                lon_f = lat_f = None  # type: ignore
+
+            if (lon_f is None or lat_f is None) and x_1992 is not None and y_1992 is not None:
+                try:
+                    lon_f, lat_f = _puwg1992_to_wgs84(float(x_1992), float(y_1992))
+                except Exception:
+                    lon_f = lat_f = None  # type: ignore
+
+            if lon_f is None or lat_f is None:
+                skipped += 1
+                continue
 
             note = _get_any(row, NOTE_KEYS)
-            note = note.strip() if isinstance(note, str) and note.strip() else None
+            note = str(note).strip() if note is not None else None
 
-            b_norm = normalize_building_no(building_no)
-            l_norm = normalize_local_no(local_no)
-            if not b_norm:
-                skipped += 1
-                continue
+            status = "active"
 
-            if no_street:
-                ulic = None
-
-            lat_v = _get_any(row, LAT_KEYS)
-            lon_v = _get_any(row, LON_KEYS)
-            x_v = _get_any(row, X92_KEYS)
-            y_v = _get_any(row, Y92_KEYS)
-
-            x_1992: Optional[int] = None
-            y_1992: Optional[int] = None
-
-            try:
-                if lat_v is not None and lon_v is not None:
-                    lat = _to_float(lat_v)
-                    lon = _to_float(lon_v)
-                elif x_v is not None and y_v is not None:
-                    x_1992 = _to_int(x_v)
-                    y_1992 = _to_int(y_v)
-                    lon, lat = _puwg1992_to_wgs84(float(x_1992), float(y_1992))
-                else:
-                    skipped += 1
-                    continue
-            except Exception:
-                skipped += 1
-                continue
-
-            exists = exists_cache.get(prg_point_id)
-            if exists is None:
-                refresh_exists_cache([prg_point_id])
-                exists = exists_cache.get(prg_point_id, False)
-
-            if exists:
-                updated += 1
-            else:
-                inserted += 1
-
-            batch.append(
-                {
-                    "source": "PRG_OFFICIAL",
-                    "prg_point_id": prg_point_id,
-                    "local_point_id": None,
-                    "terc": terc,
-                    "simc": simc,
-                    "ulic": ulic,
-                    "no_street": bool(no_street),
-                    "building_no": building_no,
-                    "building_no_norm": b_norm,
-                    "local_no": local_no,
-                    "local_no_norm": l_norm,
-                    "x_1992": x_1992,
-                    "y_1992": y_1992,
-                    "point": (float(lon), float(lat)),
-                    "note": note,
-                    "status": "active",
-                }
-            )
+            row_doc = {
+                "source": "PRG_OFFICIAL",
+                "prg_point_id": prg_point_id,
+                "local_point_id": None,
+                "terc": terc,
+                "simc": simc,
+                "ulic": ulic,
+                "no_street": bool(no_street),
+                "building_no": building_no,
+                "building_no_norm": building_no_norm,
+                "local_no": local_no,
+                "local_no_norm": local_no_norm,
+                "x_1992": x_1992,
+                "y_1992": y_1992,
+                "point": (lon_f, lat_f),
+                "note": note,
+                "status": status,
+            }
+            batch.append(row_doc)
 
             if use_full_deactivate:
                 stage_batch.append({"prg_point_id": prg_point_id})
 
-            if len(batch) >= 2000:
+            # cache exists (heurystycznie, żeby liczyć inserted/updated)
+            if prg_point_id not in exists_cache:
+                chunk_keys.append(prg_point_id)
+                if len(chunk_keys) >= 5000:
+                    refresh_exists_cache(chunk_keys)
+                    chunk_keys = []
+
+            if exists_cache.get(prg_point_id, False):
+                updated += 1
+            else:
+                inserted += 1
+                exists_cache[prg_point_id] = True
+
+            if len(batch) >= 5000:
                 flush_batch()
 
             # progress co 10k wierszy albo co 1s
@@ -808,22 +866,21 @@ class PrgService:
         flush_batch()
 
         if use_full_deactivate:
-            self.db.execute(
-                text(
-                    """
-                    UPDATE crm.prg_address_points p
-                    SET status = 'inactive', updated_at = now()
-                    WHERE p.source = 'PRG_OFFICIAL'
-                      AND p.status = 'active'
-                      AND p.prg_point_id IS NOT NULL
-                      AND NOT EXISTS (SELECT 1 FROM prg_stage_ids s WHERE s.prg_point_id = p.prg_point_id)
-                    """
-                )
-            )
+            # deaktywuj te, których nie było w stage (tylko full)
+            self.db.execute(text("""
+                UPDATE crm.prg_address_points p
+                SET status='inactive', updated_at=now()
+                WHERE p.source='PRG_OFFICIAL'
+                  AND p.status='active'
+                  AND p.prg_point_id IS NOT NULL
+                  AND NOT EXISTS (SELECT 1 FROM prg_stage_ids s WHERE s.prg_point_id=p.prg_point_id)
+            """))
 
         return inserted, updated, skipped, rows_seen
 
-    # ---- lokalne punkty pending ----
+    # -------------------------
+    # Local points (manual) + reconcile queue
+    # -------------------------
     def create_local_point(
         self,
         *,
@@ -837,58 +894,33 @@ class PrgService:
         lon: float,
         note: Optional[str],
     ) -> PrgAddressPoint:
-        if no_street:
-            ulic = None
-
-        b_norm = normalize_building_no(building_no)
-        l_norm = normalize_local_no(local_no)
-        if not b_norm:
-            raise PrgError("Nieprawidłowy numer budynku.")
-
-        q = select(PrgAddressPoint).where(
-            PrgAddressPoint.source == "PRG_LOCAL_PENDING",
-            PrgAddressPoint.terc == terc,
-            PrgAddressPoint.simc == simc,
-            PrgAddressPoint.ulic.is_(None) if ulic is None else PrgAddressPoint.ulic == ulic,
-            PrgAddressPoint.building_no_norm == b_norm,
-        )
-        if l_norm is None:
-            q = q.where(PrgAddressPoint.local_no_norm.is_(None))
-        else:
-            q = q.where(PrgAddressPoint.local_no_norm == l_norm)
-
-        exists = self.db.execute(q.limit(1)).scalar_one_or_none()
-        if exists:
-            raise PrgError("Taki lokalny punkt już istnieje (po normalizacji numeru).")
+        building_no_norm = normalize_building_no(building_no, normalize=True)
+        local_no_norm = normalize_local_no(local_no, normalize=True) if local_no else None
 
         p = PrgAddressPoint(
             source="PRG_LOCAL_PENDING",
             prg_point_id=None,
             local_point_id=str(uuid.uuid4()),
-            terc=terc,
-            simc=simc,
-            ulic=ulic,
+            terc=terc.strip(),
+            simc=simc.strip(),
+            ulic=(ulic.strip() if ulic else None),
             no_street=bool(no_street),
-            building_no=str(building_no).strip(),
-            building_no_norm=b_norm,
-            local_no=str(local_no).strip() if local_no else None,
-            local_no_norm=l_norm,
+            building_no=normalize_building_no(building_no),
+            building_no_norm=building_no_norm,
+            local_no=(normalize_local_no(local_no) if local_no else None),
+            local_no_norm=local_no_norm,
             x_1992=None,
             y_1992=None,
             point=(float(lon), float(lat)),
-            note=note,
-            status="active",
+            note=(note.strip() if note else None),
+            status="pending",
         )
         self.db.add(p)
         self.db.flush()
-        return p
 
-    def list_local_pending(self, limit: int = 200) -> List[PrgAddressPoint]:
-        return list(
-            self.db.execute(
-                select(PrgAddressPoint)
-                .where(PrgAddressPoint.source == "PRG_LOCAL_PENDING", PrgAddressPoint.status == "active")
-                .order_by(PrgAddressPoint.created_at.desc())
-                .limit(limit)
-            ).scalars()
-        )
+        q = self.db.execute(select(PrgReconcileQueue).where(PrgReconcileQueue.local_point_id == int(p.id))).scalar_one_or_none()
+        if not q:
+            self.db.add(PrgReconcileQueue(local_point_id=int(p.id), status="pending"))
+            self.db.flush()
+
+        return p

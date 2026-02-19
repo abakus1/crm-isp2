@@ -9,7 +9,7 @@ from crm.app.config import get_settings
 settings = get_settings()
 
 engine = create_engine(settings.db_dsn, pool_pre_ping=True, future=True)
-SessionLocal = sessionmaker(bind=engine, autoflush=False, autocommit=False, future=True)
+SessionLocal = sessionmaker(bind=engine, autoflush=False, autocommit=False, future=True, expire_on_commit=False)
 
 
 def get_db():
