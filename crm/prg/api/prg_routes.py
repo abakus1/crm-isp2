@@ -141,6 +141,62 @@ def prg_jobs_latest(
         raise HTTPException(status_code=404, detail="Brak jobów tego typu.")
     return _job_to_out(j)
 
+@router.get("/jobs/active", response_model=PrgJobWithLogsOut | None)
+def prg_jobs_active(
+    logs_limit: int = Query(default=30, ge=0, le=500),
+    db: Session = Depends(get_db),
+    _me: StaffUser = Depends(require(Action.PRG_IMPORT_RUN)),
+):
+    """
+    Zwraca najnowszy aktywny job PRG (status='running')
+    wraz z ostatnimi logami. Jeśli brak aktywnego joba → null.
+    """
+
+    j = (
+        db.execute(
+            select(PrgJob)
+            .where(PrgJob.status == "running")
+            .order_by(PrgJob.updated_at.desc())
+            .limit(1)
+        )
+        .scalars()
+        .first()
+    )
+
+    if not j:
+        return None
+
+    logs: list[PrgJobLogOut] = []
+
+    if logs_limit > 0:
+        rows = (
+            db.execute(
+                select(PrgJobLog)
+                .where(PrgJobLog.job_id == j.id)
+                .order_by(PrgJobLog.created_at.desc())
+                .limit(logs_limit)
+            )
+            .scalars()
+            .all()
+        )
+
+        rows = list(reversed(rows))  # rosnąco dla UI
+
+        logs = [
+            PrgJobLogOut(
+                id=int(r.id),
+                level=r.level,
+                line=r.line,
+                created_at=r.created_at,
+            )
+            for r in rows
+        ]
+
+    return PrgJobWithLogsOut(
+        **_job_to_out(j).model_dump(),
+        logs=logs,
+    )
+
 
 @router.get("/jobs/{job_id}", response_model=PrgJobWithLogsOut)
 def prg_job_get(

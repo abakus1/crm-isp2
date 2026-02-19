@@ -12,6 +12,7 @@ import os
 import tempfile
 import fcntl
 from urllib.request import Request, urlopen
+import itertools
 
 from sqlalchemy import select, text
 from sqlalchemy.dialects.postgresql import insert
@@ -22,6 +23,7 @@ from crm.db.session import SessionLocal
 from crm.db.models.prg import (
     PrgDatasetState,
     PrgAddressPoint,
+    PrgAdruniBuildingNumber,
     PrgImportFile,
     PrgJob,
     PrgJobLog,
@@ -82,6 +84,33 @@ def _puwg1992_to_wgs84(x: float, y: float) -> Tuple[float, float]:
     return float(lon), float(lat)
 
 
+def _adruni_tokens(v: str) -> list[str]:
+    # ADRUNI ma format pipe-delimited z trailing pipe, np: "24100|061401|0956810|0956810|08435|396693|706897|36|"
+    if not v:
+        return []
+    parts = [p.strip() for p in str(v).split("|")]
+    return [p for p in parts if p != ""]
+
+
+def _extract_first_by_len(tokens: list[str], n: int) -> Optional[str]:
+    for t in tokens:
+        if len(t) == n and t.isdigit():
+            return t
+    return None
+
+
+def _display_building_no(raw: str) -> str:
+    # do UI / podglądu: czytelne, ale stabilne (bez spacji na brzegach)
+    return (raw or "").strip().upper()
+
+
+def _display_local_no(raw: Optional[str]) -> Optional[str]:
+    if raw is None:
+        return None
+    s = str(raw).strip().upper()
+    return s or None
+
+
 class PrgService:
     DEFAULT_PRG_SOURCE_URL = "https://opendata.geoportal.gov.pl/prg/adresy/adruni/POLSKA.zip"
 
@@ -94,6 +123,16 @@ class PrgService:
     def _job_log(self, job_id: uuid.UUID, line: str, level: str = "info") -> None:
         # WAŻNE: commit, żeby inne sesje (polling z UI) widziały logi "na żywo".
         self.db.add(PrgJobLog(job_id=job_id, level=level, line=line))
+        self.db.flush()
+        self.db.commit()
+
+    def _job_log_bulk(self, job_id: uuid.UUID, lines: list[str], level: str = "info") -> None:
+        """
+        Szybki log: zapisujemy wiele linii naraz, 1 commit.
+        """
+        if not lines:
+            return
+        self.db.add_all([PrgJobLog(job_id=job_id, level=level, line=line) for line in lines])
         self.db.flush()
         self.db.commit()
 
@@ -129,7 +168,6 @@ class PrgService:
         self.db.commit()
 
     def start_fetch_job(self, *, actor_staff_id: Optional[int]) -> PrgJob:
-        # lock: nie pozwalamy odpalić kolejnego fetch, jeśli jest running
         running = self.db.execute(
             select(PrgJob).where(PrgJob.job_type == "fetch", PrgJob.status == "running").limit(1)
         ).scalar_one_or_none()
@@ -236,9 +274,7 @@ class PrgService:
         self.db.flush()
         return st
 
-    def mark_import(
-        self, mode: str, source_url: Optional[str] = None, checksum: Optional[str] = None
-    ) -> PrgDatasetState:
+    def mark_import(self, mode: str, source_url: Optional[str] = None, checksum: Optional[str] = None) -> PrgDatasetState:
         st = self.get_state()
         now = _now()
         st.last_import_at = now
@@ -262,15 +298,12 @@ class PrgService:
         return p
 
     def _prg_root_dir(self) -> Path:
-        # Kanonicznie trzymamy WSZYSTKO przy imporcie w jednym miejscu:
-        # /var/prg/imports  (lub ./var/prg/imports w repo, jeśli taki ENV).
-        # Dzięki temu locki i last.sha256 nie "wędrują" po katalogach projektu.
         return self.ensure_import_dir()
 
     def _ensure_prg_dirs(self) -> tuple[Path, Path, Path]:
-        root = self._prg_root_dir()  # = import_dir
-        state_dir = root  # last.sha256
-        locks_dir = root  # *.lock
+        root = self._prg_root_dir()
+        state_dir = root
+        locks_dir = root
         root.mkdir(parents=True, exist_ok=True)
         return root, state_dir, locks_dir
 
@@ -297,13 +330,30 @@ class PrgService:
             fcntl.flock(fp.fileno(), fcntl.LOCK_UN)
         finally:
             fp.close()
-
-        # sprzątanie: usuń lock file
         try:
             lock_path.unlink(missing_ok=True)
         except Exception:
-            # nie blokuj joba, jeśli FS ma focha
             pass
+
+    # -------------------------
+    # Debug logging of skipped rows
+    # -------------------------
+    def _skip_logger_config(self) -> tuple[bool, int]:
+        """
+        Logowanie 'pominietych' rekordów jest turbo przydatne do debugowania,
+        ale w produkcji potrafi zabić DB (miliony logów).
+        Sterowanie ENV:
+          PRG_LOG_SKIPPED=1   -> włącz
+          PRG_LOG_SKIPPED_LIMIT=2000 -> max logowanych linii na job (default 2000)
+        """
+        enabled = (os.getenv("PRG_LOG_SKIPPED") or "").strip().lower() in ("1", "true", "t", "yes", "y", "tak", "on")
+        try:
+            limit = int((os.getenv("PRG_LOG_SKIPPED_LIMIT") or "").strip() or "2000")
+        except Exception:
+            limit = 2000
+        if limit < 0:
+            limit = 0
+        return enabled, limit
 
     # -------------------------
     # FETCH (python) + progress
@@ -348,7 +398,7 @@ class PrgService:
                         bytes_dl += len(chunk)
 
                         now = _now()
-                        if (now - last_tick).total_seconds() >= 0.5:  # <-- live update co 0.5s
+                        if (now - last_tick).total_seconds() >= 0.5:
                             last_tick = now
                             self._job_update(
                                 job,
@@ -384,7 +434,6 @@ class PrgService:
                 tmp_zip.replace(tmp_dest)
                 os.replace(str(tmp_dest), str(dest))
 
-                # rejestrujemy plik jako pending do importu (żeby UI “widziało co dalej”)
                 raw = dest.read_bytes()
                 checksum = hashlib.sha256(raw).hexdigest()
                 imp = self.db.execute(select(PrgImportFile).where(PrgImportFile.checksum == checksum)).scalar_one_or_none()
@@ -424,7 +473,7 @@ class PrgService:
                     status="success",
                     stage="done",
                     finished=True,
-                   message=f"✅ Pobieranie PRG zakończone — brak zmian (checksum bez zmian).",
+                    message="✅ Pobieranie PRG zakończone — brak zmian (checksum bez zmian).",
                     meta_patch={
                         "changed": False,
                         "bytes_downloaded": bytes_dl,
@@ -434,7 +483,6 @@ class PrgService:
                     },
                 )
 
-            # cleanup tmp
             try:
                 for p in tmp_dir.iterdir():
                     p.unlink(missing_ok=True)
@@ -464,8 +512,6 @@ class PrgService:
 
             self._job_update(job, stage="opening", message=f"Otwieram plik: {path.name}", meta_patch={"filename": path.name})
 
-            # checksum pliku wejściowego (szybko: sha256 po bytes – tu OK, bo to ZIP/CSV, ale może być duże;
-            # zostawiamy, bo i tak chcemy detekcję “już było”)
             raw = path.read_bytes()
             checksum = hashlib.sha256(raw).hexdigest()
 
@@ -486,25 +532,40 @@ class PrgService:
 
             self._job_update(job, stage="reading_headers", message="Czytam nagłówki i wykrywam separator…")
 
-            # STREAM: nie robimy read_bytes ZIP->RAM; czytamy z dysku
             rows_iter, total_hint = self._iter_rows_from_file_path(path, job=job)
-            # total_hint może być None (ZIP nie daje total łatwo). UI i tak pokaże “rows_seen”.
+
+            # Peek pierwszego wiersza, żeby dobrać importer (ADRUNI vs punkty z koordynatami)
+            it = iter(rows_iter)
+            first = next(it, None)
+            if first is None:
+                raise PrgError("Plik PRG jest pusty (brak wierszy).")
+            keys = set(first.keys())
+            rows_iter2 = itertools.chain([first], it)
+
+            is_adruni = ("adruni" in keys) and (("teryt" in keys or "terc" in keys or "teryt_gmina" in keys) and ("numer" in keys or "building_no" in keys))
 
             inserted = updated = skipped = rows_seen = 0
-            self._job_update(job, stage="processing_rows", message="Przetwarzam wiersze…", meta_patch={
-                "rows_seen": 0,
-                "inserted": 0,
-                "updated": 0,
-                "skipped": 0,
-                "rows_total_hint": total_hint,
-            })
-            self._job_log(job.id, "START import (stream)")
-
-            inserted, updated, skipped, rows_seen = self._upsert_official_points_with_progress(
-                job=job,
-                rows=rows_iter,
-                mode=mode,
+            self._job_update(
+                job,
+                stage="processing_rows",
+                message="Przetwarzam wiersze…",
+                meta_patch={
+                    "rows_seen": 0,
+                    "inserted": 0,
+                    "updated": 0,
+                    "skipped": 0,
+                    "rows_total_hint": total_hint,
+                    "import_kind": "adruni" if is_adruni else "address_points",
+                    "skipped_logged": 0,
+                    "skipped_log_limit": self._skip_logger_config()[1],
+                },
             )
+            self._job_log(job.id, f"START import (stream) kind={'ADRUNI' if is_adruni else 'ADDRESS_POINTS'} mode={mode}")
+
+            if is_adruni:
+                inserted, updated, skipped, rows_seen = self._upsert_adruni_building_numbers_with_progress(job=job, rows=rows_iter2, mode=mode)
+            else:
+                inserted, updated, skipped, rows_seen = self._upsert_official_points_with_progress(job=job, rows=rows_iter2, mode=mode)
 
             imp.status = "done"
             imp.rows_inserted = inserted
@@ -516,28 +577,17 @@ class PrgService:
             self.mark_import(mode=mode, checksum=checksum)
 
             self._job_log(job.id, f"DONE import rows_seen={rows_seen} inserted={inserted} updated={updated} skipped={skipped}")
-            self._job_update(job, stage="finalizing", message="Finalizuję i zapisuję wynik…", meta_patch={
-                "rows_seen": rows_seen,
-                "inserted": inserted,
-                "updated": updated,
-                "skipped": skipped,
-                "checksum": checksum,
-            })
+            self._job_update(
+                job,
+                stage="finalizing",
+                message="Finalizuję i zapisuję wynik…",
+                meta_patch={"rows_seen": rows_seen, "inserted": inserted, "updated": updated, "skipped": skipped, "checksum": checksum},
+            )
 
-            # reconcile auto
-            if settings.prg_auto_reconcile:
+            if settings.prg_auto_reconcile and (not is_adruni):
                 self._job_update(job, stage="reconcile", message="Uruchamiam reconcile…")
-                stats = PrgReconcileService(self.db).run(
-                    actor_staff_id=None,
-                    job=True,
-                    distance_m=settings.prg_reconcile_distance_m,
-                )
-                self._job_update(job, meta_patch={"reconcile": {
-                    "matched": stats.matched,
-                    "queued": stats.queued,
-                    "scanned_pending": stats.scanned_pending,
-                    "finished_at": stats.finished_at.isoformat(),
-                }})
+                stats = PrgReconcileService(self.db).run(actor_staff_id=None, job=True, distance_m=settings.prg_reconcile_distance_m)
+                self._job_update(job, meta_patch={"reconcile": {"matched": stats.matched, "queued": stats.queued, "scanned_pending": stats.scanned_pending, "finished_at": stats.finished_at.isoformat()}})
 
             if settings.prg_delete_file_after_import:
                 try:
@@ -546,15 +596,12 @@ class PrgService:
                     pass
 
             self.db.flush()
-
             self._job_update(job, status="success", stage="done", finished=True, message="Import PRG zakończony ✅")
         finally:
             self._release_lockfile(fp_lock, lock_path)
 
     def list_import_files(self, limit: int = 50) -> List[PrgImportFile]:
-        return list(
-            self.db.execute(select(PrgImportFile).order_by(PrgImportFile.created_at.desc()).limit(limit)).scalars()
-        )
+        return list(self.db.execute(select(PrgImportFile).order_by(PrgImportFile.created_at.desc()).limit(limit)).scalars())
 
     def enqueue_file_from_upload(self, *, filename: str, content: bytes, mode: str) -> PrgImportFile:
         mode = (mode or "delta").strip().lower()
@@ -577,13 +624,7 @@ class PrgService:
                 pass
             return row
 
-        imp = PrgImportFile(
-            filename=str(target.name),
-            size_bytes=len(content),
-            mode=mode,
-            status="pending",
-            checksum=checksum,
-        )
+        imp = PrgImportFile(filename=str(target.name), size_bytes=len(content), mode=mode, status="pending", checksum=checksum)
         self.db.add(imp)
         self.db.flush()
         return imp
@@ -594,8 +635,7 @@ class PrgService:
     def _iter_rows_from_file_path(self, path: Path, job: Optional[PrgJob] = None) -> tuple[Iterable[Dict[str, Any]], Optional[int]]:
         """
         Streamuje wiersze z ZIP/CSV bez ładowania całości do RAM.
-        FIX: dla ZIP NIE robimy seek(0) na ZipExtFile/TextIOWrapper.
-        Robimy sample w pierwszym open, potem reopen do DictReader.
+        Dla ZIP: sample w pierwszym open, potem reopen do DictReader (bez seek).
         """
         suffix = path.suffix.lower()
 
@@ -612,7 +652,6 @@ class PrgService:
                 yield out
 
         def detect_delimiter(sample: str) -> str:
-            # prosto i stabilnie
             semi = sample.count(";")
             comma = sample.count(",")
             tab = sample.count("\t")
@@ -635,7 +674,6 @@ class PrgService:
             if not cand:
                 cand = names[0]
 
-            # 1) SAMPLE (osobne otwarcie)
             with zf.open(cand) as bf:
                 txt = io.TextIOWrapper(bf, encoding="utf-8-sig", errors="replace", newline="")
                 head = txt.read(4096)
@@ -643,7 +681,6 @@ class PrgService:
             if job is not None:
                 self._job_log(job.id, f"DETECT zip_entry={cand} delimiter={repr(delim)} sample_len={len(head)}")
 
-            # 2) REOPEN do czytania od początku (bez seek)
             def rows() -> Iterable[Dict[str, Any]]:
                 try:
                     with zf.open(cand) as bf2:
@@ -654,7 +691,6 @@ class PrgService:
 
             return rows(), None
 
-        # CSV/TSV/TXT (tu seek jest OK)
         def rows_plain() -> Iterable[Dict[str, Any]]:
             with path.open("r", encoding="utf-8-sig", errors="replace", newline="") as f:
                 head = f.read(4096)
@@ -667,15 +703,356 @@ class PrgService:
         return rows_plain(), None
 
     # -------------------------
-    # UPSERT + progress
+    # ADRUNI importer (building numbers)
     # -------------------------
-    def _upsert_official_points_with_progress(
-        self, *, job: PrgJob, rows: Iterable[Dict[str, Any]], mode: str
+    def _upsert_adruni_building_numbers_with_progress(
+        self,
+        *,
+        job: PrgJob,
+        rows: Iterable[Dict[str, Any]],
+        mode: str
     ) -> Tuple[int, int, int, int]:
+        """
+        Import ADRUNI (teryt, miejscowosc, ulica, numer, adruni).
+        Parsuje terc/simc/ulic z kolumny 'adruni' (pipe-delimited '|').
+
+        full: TRUNCATE i insert wszystko
+        delta: INSERT ... ON CONFLICT DO NOTHING (dodaj nowe, reszta to skipped)
+        """
+
+        inserted = 0
+        updated = 0  # ADRUNI: delta nie robi update – konflikty liczymy jako skipped
+        skipped = 0
+        rows_seen = 0
+
+        # Dodatkowe liczniki diagnostyczne (mega pomagają)
+        skipped_validation = 0
+        skipped_conflict = 0
+
+        log_skipped, log_limit = self._skip_logger_config()
+        skipped_logged = 0
+        skip_reasons: dict[str, int] = {}
+
+        log_buf: list[str] = []
+        last_log_flush = _now()
+
+        def bump_reason(reason: str) -> None:
+            nonlocal skip_reasons
+            skip_reasons[reason] = int(skip_reasons.get(reason, 0)) + 1
+
+        def log_skip(reason: str, row: Dict[str, Any]) -> None:
+            nonlocal skipped_logged, log_buf
+            bump_reason(reason)
+            if not log_skipped or skipped_logged >= log_limit:
+                return
+
+            teryt = row.get("teryt") or row.get("terc") or row.get("teryt_gmina")
+            numer = row.get("numer") or row.get("building_no") or row.get("nr_domu")
+            adr = row.get("adruni")
+            miejsc = row.get("miejscowosc")
+            ulica = row.get("ulica")
+
+            line = (
+                f"[skip][adruni] row={rows_seen} reason={reason} "
+                f"teryt={teryt!s} numer={numer!s} miejscowosc={miejsc!s} ulica={ulica!s} "
+                f"adruni={str(adr)[:120]!s}"
+            )
+            log_buf.append(line)
+            skipped_logged += 1
+
+        def flush_logs_if_needed(force: bool = False) -> None:
+            nonlocal log_buf, last_log_flush
+            if not log_buf:
+                return
+            now = _now()
+            if force or (now - last_log_flush).total_seconds() >= 0.5 or len(log_buf) >= 250:
+                self._job_log_bulk(job.id, log_buf, level="warn")
+                log_buf = []
+                last_log_flush = now
+
+        if mode == "full":
+            self._job_log(job.id, "ADRUNI full: TRUNCATE crm.prg_adruni_building_numbers")
+            self.db.execute(text("TRUNCATE TABLE crm.prg_adruni_building_numbers"))
+            self.db.commit()
+
+        # mapowanie kolumn z CSV
+        TERYT_KEYS = ["teryt", "terc", "teryt_gmina", "gmina_terc"]
+        PLACE_KEYS = ["miejscowosc", "place_name", "miejscowość"]
+        STREET_NAME_KEYS = ["ulica", "street_name"]
+        BUILD_KEYS = ["numer", "building_no", "nr_domu", "nr_budynku"]
+        ADRUNI_KEYS = ["adruni", "raw", "record"]
+
+        batch: list[dict[str, Any]] = []
+        BATCH_SIZE = 5000
+
+        last_progress_at = _now()
+
+        def flush_batch() -> None:
+            nonlocal batch, inserted, skipped, skipped_conflict
+            if not batch:
+                return
+
+            with_ulic = [b for b in batch if b.get("ulic") is not None]
+            no_ulic = [b for b in batch if b.get("ulic") is None]
+
+            local_inserted = 0
+
+            if with_ulic:
+                stmt1 = (
+                    insert(PrgAdruniBuildingNumber)
+                    .values(with_ulic)
+                    .on_conflict_do_nothing(
+                        index_elements=[
+                            PrgAdruniBuildingNumber.terc,
+                            PrgAdruniBuildingNumber.simc,
+                            PrgAdruniBuildingNumber.ulic,
+                            PrgAdruniBuildingNumber.building_no_norm,
+                        ],
+                        index_where=PrgAdruniBuildingNumber.ulic.isnot(None),
+                    )
+                    .returning(PrgAdruniBuildingNumber.id)
+                )
+                res1 = self.db.execute(stmt1)
+                local_inserted += len(res1.fetchall())
+
+            if no_ulic:
+                stmt2 = (
+                    insert(PrgAdruniBuildingNumber)
+                    .values(no_ulic)
+                    .on_conflict_do_nothing(
+                        index_elements=[
+                            PrgAdruniBuildingNumber.terc,
+                            PrgAdruniBuildingNumber.simc,
+                            PrgAdruniBuildingNumber.building_no_norm,
+                        ],
+                        index_where=PrgAdruniBuildingNumber.ulic.is_(None),
+                    )
+                    .returning(PrgAdruniBuildingNumber.id)
+                )
+                res2 = self.db.execute(stmt2)
+                local_inserted += len(res2.fetchall())
+
+            self.db.commit()
+
+            inserted += local_inserted
+            conflicts = (len(batch) - local_inserted)
+            skipped += conflicts
+            skipped_conflict += conflicts
+
+            batch = []
+
+        for row in rows:
+            rows_seen += 1
+
+            teryt = _get_any(row, TERYT_KEYS)
+            building_no_raw = _get_any(row, BUILD_KEYS)
+            adruni_raw = _get_any(row, ADRUNI_KEYS)
+
+            if not teryt:
+                skipped += 1
+                skipped_validation += 1
+                log_skip("missing_teryt", row)
+                flush_logs_if_needed()
+                continue
+            if not building_no_raw:
+                skipped += 1
+                skipped_validation += 1
+                log_skip("missing_building_no", row)
+                flush_logs_if_needed()
+                continue
+            if not adruni_raw:
+                skipped += 1
+                skipped_validation += 1
+                log_skip("missing_adruni", row)
+                flush_logs_if_needed()
+                continue
+
+            place_name = _get_any(row, PLACE_KEYS)
+            street_name = _get_any(row, STREET_NAME_KEYS)
+
+            tokens = _adruni_tokens(str(adruni_raw))
+
+            # terc: z kolumny (teryt) -> zfill(7)
+            terc = str(teryt).strip()
+            terc = "".join([c for c in terc if c.isdigit()])
+            if not terc:
+                skipped += 1
+                skipped_validation += 1
+                log_skip("invalid_teryt_digits", row)
+                flush_logs_if_needed()
+                continue
+            terc = terc.zfill(7)
+
+            # ADRUNI (pozycje):
+            # [0]=ID? (5), [1]=TERYT (6), [2]=SIMC (7), [3]=SIMC (7), [4]=ULIC (5 lub 00000), ..., [-1]=numer
+            simc = None
+            if len(tokens) >= 3:
+                cand = tokens[2].strip()
+                if cand.isdigit() and len(cand) == 7:
+                    simc = cand
+
+            ulic = None
+            if len(tokens) >= 5:
+                cand = tokens[4].strip()
+                if cand.isdigit() and len(cand) == 5 and cand != "00000":
+                    ulic = cand
+
+            # Fallback: jeśli format się zmienił / źródło inne
+            if not simc:
+                simc = _extract_first_by_len(tokens, 7)
+
+            if ulic is None:
+                # ważne: ignorujemy tokens[0], bo często jest 5-cyfrowym "id" rekordu (np. 59424)
+                for t in tokens[1:]:
+                    if len(t) == 5 and t.isdigit() and t != "00000":
+                        ulic = t
+                        break
+
+            if not simc:
+                skipped += 1
+                skipped_validation += 1
+                log_skip("missing_simc_in_adruni", row)
+                flush_logs_if_needed()
+                continue
+
+            simc = str(simc).strip()
+            ulic = str(ulic).strip() if ulic else None
+
+            building_no = _display_building_no(str(building_no_raw))
+            building_no_norm = normalize_building_no(str(building_no_raw))
+
+            # id: deterministyczny bigint z hash (żeby primary key był stabilny)
+            h = hashlib.sha1(
+                f"{terc}|{simc}|{ulic or ''}|{building_no_norm}|{adruni_raw}".encode("utf-8", errors="ignore")
+            ).hexdigest()
+            row_id = int(h[:15], 16)  # 60-bit-ish
+
+            if rows_seen <= 5:
+                self._job_log(
+                    job.id,
+                    f"PROBE row={rows_seen} terc={terc} simc={simc} ulic={ulic} bnn={building_no_norm} bno={building_no} adruni={str(adruni_raw)[:80]}",
+                )
+
+            batch.append(
+                {
+                    "id": row_id,
+                    "terc": terc,
+                    "simc": simc,
+                    "ulic": ulic,
+                    "place_name": str(place_name).strip() if place_name is not None else None,
+                    "street_name": str(street_name).strip() if street_name is not None else None,
+                    "building_no": building_no,
+                    "building_no_norm": building_no_norm,
+                    "adruni": str(adruni_raw),
+                }
+            )
+
+            if len(batch) >= BATCH_SIZE:
+                flush_batch()
+
+            now = _now()
+            if (now - last_progress_at).total_seconds() >= 0.5:
+                last_progress_at = now
+                flush_logs_if_needed()
+                self._job_update(
+                    job,
+                    stage="processing_rows",
+                    message="Przetwarzam ADRUNI…",
+                    meta_patch={
+                        "rows_seen": rows_seen,
+                        "inserted": inserted,
+                        "updated": updated,
+                        "skipped": skipped,
+                        "skipped_validation": skipped_validation,
+                        "skipped_conflict": skipped_conflict,
+                        "skipped_logged": skipped_logged,
+                        "skipped_reasons": dict(skip_reasons),
+                    },
+                )
+
+        flush_batch()
+        flush_logs_if_needed(force=True)
+
+        self._job_update(
+            job,
+            stage="processing_rows",
+            message="Przetwarzam ADRUNI…",
+            meta_patch={
+                "rows_seen": rows_seen,
+                "inserted": inserted,
+                "updated": updated,
+                "skipped": skipped,
+                "skipped_validation": skipped_validation,
+                "skipped_conflict": skipped_conflict,
+                "skipped_logged": skipped_logged,
+                "skipped_reasons": dict(skip_reasons),
+            },
+        )
+
+        if log_skipped and skipped > skipped_logged:
+            self._job_log(
+                job.id,
+                f"[skip][adruni] UCIĘTO logowanie pominietych: logged={skipped_logged}/{skipped} (limit={log_limit}). "
+                f"Ustaw PRG_LOG_SKIPPED_LIMIT wyżej, jeśli naprawdę chcesz więcej.",
+                level="warn",
+            )
+
+        return inserted, updated, skipped, rows_seen
+
+
+    # -------------------------
+    # UPSERT + progress (address points)
+    # -------------------------
+    def _upsert_official_points_with_progress(self, *, job: PrgJob, rows: Iterable[Dict[str, Any]], mode: str) -> Tuple[int, int, int, int]:
         inserted = 0
         updated = 0
         skipped = 0
         rows_seen = 0
+
+        log_skipped, log_limit = self._skip_logger_config()
+        skipped_logged = 0
+        skip_reasons: dict[str, int] = {}
+
+        log_buf: list[str] = []
+        last_log_flush = _now()
+
+        def bump_reason(reason: str) -> None:
+            nonlocal skip_reasons
+            skip_reasons[reason] = int(skip_reasons.get(reason, 0)) + 1
+
+        def log_skip(reason: str, row: Dict[str, Any]) -> None:
+            nonlocal skipped_logged, log_buf
+            bump_reason(reason)
+            if not log_skipped or skipped_logged >= log_limit:
+                return
+
+            pid = row.get("prg_point_id") or row.get("id") or row.get("auid")
+            terc = row.get("terc") or row.get("teryt_gmina")
+            simc = row.get("simc") or row.get("miejscowosc_simc")
+            ulic = row.get("ulic") or row.get("ulica")
+            bno = row.get("building_no") or row.get("numer") or row.get("nr_domu")
+            lat = row.get("lat") or row.get("latitude")
+            lon = row.get("lon") or row.get("lng") or row.get("longitude")
+            x92 = row.get("x") or row.get("x_1992") or row.get("x_puwg1992")
+            y92 = row.get("y") or row.get("y_1992") or row.get("y_puwg1992")
+
+            line = (
+                f"[skip][points] row={rows_seen} reason={reason} "
+                f"id={pid!s} terc={terc!s} simc={simc!s} ulic={ulic!s} bno={bno!s} "
+                f"lat={lat!s} lon={lon!s} x1992={x92!s} y1992={y92!s}"
+            )
+            log_buf.append(line)
+            skipped_logged += 1
+
+        def flush_logs_if_needed(force: bool = False) -> None:
+            nonlocal log_buf, last_log_flush
+            if not log_buf:
+                return
+            now = _now()
+            if force or (now - last_log_flush).total_seconds() >= 0.5 or len(log_buf) >= 250:
+                self._job_log_bulk(job.id, log_buf, level="warn")
+                log_buf = []
+                last_log_flush = now
 
         use_full_deactivate = mode == "full"
         if use_full_deactivate:
@@ -705,9 +1082,7 @@ class PrgService:
         def refresh_exists_cache(keys: list[str]) -> None:
             if not keys:
                 return
-            existing = set(
-                self.db.execute(select(PrgAddressPoint.prg_point_id).where(PrgAddressPoint.prg_point_id.in_(keys))).scalars().all()
-            )
+            existing = set(self.db.execute(select(PrgAddressPoint.prg_point_id).where(PrgAddressPoint.prg_point_id.in_(keys))).scalars().all())
             for k in keys:
                 exists_cache[k] = k in existing
 
@@ -716,7 +1091,6 @@ class PrgService:
             if not batch:
                 return
 
-            # UPSERT:
             stmt = insert(PrgAddressPoint).values(batch)
             update_cols = {
                 "terc": stmt.excluded.terc,
@@ -734,20 +1108,15 @@ class PrgService:
                 "status": stmt.excluded.status,
                 "updated_at": _now(),
             }
-            stmt = stmt.on_conflict_do_update(
-                index_elements=[PrgAddressPoint.prg_point_id],
-                set_=update_cols,
-            )
+            stmt = stmt.on_conflict_do_update(index_elements=[PrgAddressPoint.prg_point_id], set_=update_cols)
             self.db.execute(stmt)
 
             if use_full_deactivate and stage_batch:
-                self.db.execute(
-                    text("INSERT INTO prg_stage_ids (prg_point_id) VALUES (:prg_point_id) ON CONFLICT DO NOTHING"),
-                    stage_batch,
-                )
+                self.db.execute(text("INSERT INTO prg_stage_ids (prg_point_id) VALUES (:prg_point_id) ON CONFLICT DO NOTHING"), stage_batch)
 
             batch = []
             stage_batch = []
+            self.db.commit()
 
         last_progress_at = _now()
         chunk_keys: list[str] = []
@@ -758,6 +1127,8 @@ class PrgService:
             prg_point_id = _get_any(row, ID_KEYS)
             if not prg_point_id:
                 skipped += 1
+                log_skip("missing_prg_point_id", row)
+                flush_logs_if_needed()
                 continue
             prg_point_id = str(prg_point_id).strip()
 
@@ -765,6 +1136,8 @@ class PrgService:
             simc = _get_any(row, SIMC_KEYS)
             if not terc or not simc:
                 skipped += 1
+                log_skip("missing_terc_or_simc", row)
+                flush_logs_if_needed()
                 continue
             terc = str(terc).strip()
             simc = str(simc).strip()
@@ -778,13 +1151,16 @@ class PrgService:
             building_no_raw = _get_any(row, BUILD_KEYS)
             if not building_no_raw:
                 skipped += 1
+                log_skip("missing_building_no", row)
+                flush_logs_if_needed()
                 continue
-            building_no = normalize_building_no(str(building_no_raw))
-            building_no_norm = normalize_building_no(str(building_no_raw), normalize=True)
+
+            building_no = _display_building_no(str(building_no_raw))
+            building_no_norm = normalize_building_no(str(building_no_raw))
 
             local_no_raw = _get_any(row, LOCAL_KEYS)
-            local_no = normalize_local_no(str(local_no_raw)) if local_no_raw else None
-            local_no_norm = normalize_local_no(str(local_no_raw), normalize=True) if local_no_raw else None
+            local_no = _display_local_no(str(local_no_raw)) if local_no_raw else None
+            local_no_norm = normalize_local_no(str(local_no_raw)) if local_no_raw else None
 
             lat = _get_any(row, LAT_KEYS)
             lon = _get_any(row, LON_KEYS)
@@ -799,7 +1175,6 @@ class PrgService:
                 except Exception:
                     x_1992 = y_1992 = None
 
-            # point:
             if lon is not None and lat is not None:
                 try:
                     lon_f = _to_float(lon)
@@ -817,6 +1192,8 @@ class PrgService:
 
             if lon_f is None or lat_f is None:
                 skipped += 1
+                log_skip("missing_coordinates", row)
+                flush_logs_if_needed()
                 continue
 
             note = _get_any(row, NOTE_KEYS)
@@ -847,7 +1224,6 @@ class PrgService:
             if use_full_deactivate:
                 stage_batch.append({"prg_point_id": prg_point_id})
 
-            # cache exists (heurystycznie, żeby liczyć inserted/updated)
             if prg_point_id not in exists_cache:
                 chunk_keys.append(prg_point_id)
                 if len(chunk_keys) >= 5000:
@@ -863,34 +1239,66 @@ class PrgService:
             if len(batch) >= 5000:
                 flush_batch()
 
-            # progress co 10k wierszy albo co 1s
             now = _now()
-            if rows_seen % 10000 == 0 or (now - last_progress_at).total_seconds() >= 1.0:
+            if (now - last_progress_at).total_seconds() >= 0.5:
                 last_progress_at = now
-                self._job_update(job, stage="processing_rows", message="Przetwarzam wiersze…", meta_patch={
-                    "rows_seen": rows_seen,
-                    "inserted": inserted,
-                    "updated": updated,
-                    "skipped": skipped,
-                })
-                if rows_seen % 10000 == 0:
-                    self._job_log(job.id, f"PROGRESS rows={rows_seen} ins={inserted} upd={updated} skip={skipped}")
+                flush_logs_if_needed()
+                self._job_update(
+                    job,
+                    stage="processing_rows",
+                    message="Przetwarzam wiersze…",
+                    meta_patch={
+                        "rows_seen": rows_seen,
+                        "inserted": inserted,
+                        "updated": updated,
+                        "skipped": skipped,
+                        "skipped_logged": skipped_logged,
+                        "skipped_reasons": dict(skip_reasons),
+                    },
+                )
 
         if chunk_keys:
             refresh_exists_cache(chunk_keys)
 
         flush_batch()
+        flush_logs_if_needed(force=True)
 
         if use_full_deactivate:
-            # deaktywuj te, których nie było w stage (tylko full)
-            self.db.execute(text("""
+            self.db.execute(
+                text(
+                    """
                 UPDATE crm.prg_address_points p
                 SET status='inactive', updated_at=now()
                 WHERE p.source='PRG_OFFICIAL'
                   AND p.status='active'
                   AND p.prg_point_id IS NOT NULL
                   AND NOT EXISTS (SELECT 1 FROM prg_stage_ids s WHERE s.prg_point_id=p.prg_point_id)
-            """))
+            """
+                )
+            )
+            self.db.commit()
+
+        self._job_update(
+            job,
+            stage="processing_rows",
+            message="Przetwarzam wiersze…",
+            meta_patch={
+                "rows_seen": rows_seen,
+                "inserted": inserted,
+                "updated": updated,
+                "skipped": skipped,
+                "skipped_logged": skipped_logged,
+                "skipped_reasons": dict(skip_reasons),
+            },
+        )
+
+        if log_skipped and skipped > skipped_logged:
+            self._job_log(
+                job.id,
+                f"[skip][points] UCIĘTO logowanie pominietych: logged={skipped_logged}/{skipped} (limit={log_limit}). "
+                f"Ustaw PRG_LOG_SKIPPED_LIMIT wyżej, jeśli naprawdę chcesz więcej.",
+                level="warn",
+            )
 
         return inserted, updated, skipped, rows_seen
 
@@ -910,8 +1318,8 @@ class PrgService:
         lon: float,
         note: Optional[str],
     ) -> PrgAddressPoint:
-        building_no_norm = normalize_building_no(building_no, normalize=True)
-        local_no_norm = normalize_local_no(local_no, normalize=True) if local_no else None
+        building_no_norm = normalize_building_no(building_no)
+        local_no_norm = normalize_local_no(local_no) if local_no else None
 
         p = PrgAddressPoint(
             source="PRG_LOCAL_PENDING",
@@ -919,26 +1327,23 @@ class PrgService:
             local_point_id=str(uuid.uuid4()),
             terc=terc.strip(),
             simc=simc.strip(),
-            ulic=(ulic.strip() if ulic else None),
+            ulic=ulic.strip() if ulic else None,
             no_street=bool(no_street),
-            building_no=normalize_building_no(building_no),
+            building_no=_display_building_no(building_no),
             building_no_norm=building_no_norm,
-            local_no=(normalize_local_no(local_no) if local_no else None),
+            local_no=_display_local_no(local_no) if local_no else None,
             local_no_norm=local_no_norm,
             x_1992=None,
             y_1992=None,
             point=(float(lon), float(lat)),
-            note=(note.strip() if note else None),
-            status="pending",
+            note=note.strip() if note else None,
+            status="active",
         )
         self.db.add(p)
         self.db.flush()
 
-        q = self.db.execute(
-            select(PrgReconcileQueue).where(PrgReconcileQueue.local_point_id == int(p.id))
-        ).scalar_one_or_none()
-        if not q:
-            self.db.add(PrgReconcileQueue(local_point_id=int(p.id), status="pending"))
-            self.db.flush()
-
+        # enqueue reconcile
+        self.db.add(PrgReconcileQueue(local_point_id=p.id, status="pending", candidates=[]))
+        self.db.flush()
+        self.db.commit()
         return p

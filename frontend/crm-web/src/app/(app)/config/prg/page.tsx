@@ -76,6 +76,11 @@ export default function PrgConfigPage() {
   const [job, setJob] = useState<PrgJob | null>(null);
   const pollRef = useRef<number | null>(null);
 
+  // KEEPALIVE (tylko na ekranie PRG i tylko gdy job running)
+  const keepaliveRef = useRef<number | null>(null);
+  const lastPingAtRef = useRef<number>(0);
+  const KEEPALIVE_MS = 60_000;
+
   async function loadState() {
     if (!token) return;
     try {
@@ -102,10 +107,18 @@ export default function PrgConfigPage() {
 
     setJob(j);
 
+    // czyścimy "Start ..." jak już job jest w toku / skończony
+    if (j.status === "running") {
+      setInfo(null);
+    }
+
     if (j.status !== "running") {
       if (pollRef.current) window.clearInterval(pollRef.current);
       pollRef.current = null;
+      // po zakończeniu odśwież stan datasetu
       await loadState();
+      // i nie trzymaj w UI starego "Start ..."
+      setInfo(null);
     }
   }
 
@@ -124,6 +137,25 @@ export default function PrgConfigPage() {
     }, interval);
   }
 
+  async function loadActiveJob() {
+    if (!token) return;
+    try {
+      const j = await apiFetch<PrgJob | null>("/prg/jobs/active?logs_limit=30", {
+        method: "GET",
+        token,
+        onUnauthorized: () => logout(),
+      });
+
+      if (j && j.status === "running") {
+        setJob(j);
+        setInfo(null);
+        startPolling(j.id, j.job_type);
+      }
+    } catch {
+      // ignorujemy – UI ma działać nawet jeśli endpoint chwilowo nie działa
+    }
+  }
+
   async function runFetch() {
     if (!token) return;
     setErr(null);
@@ -139,10 +171,7 @@ export default function PrgConfigPage() {
       });
 
       setJob(res.job);
-      setInfo("Start pobierania PRG…");
-
-      // tu wcześniej było: startPolling(res.job.id, res.job.job_type) + await loadJob()
-      // to robiło dubla requestów; teraz startPolling robi pierwszy load sam.
+      setInfo("Trwa pobieranie PRG…");
       startPolling(res.job.id, res.job.job_type);
     } catch (e: any) {
       const ae = e as ApiError;
@@ -165,9 +194,7 @@ export default function PrgConfigPage() {
       });
 
       setJob(res.job);
-      setInfo("Start importu delta PRG…");
-
-      // ważne: przekaż job_type, bo interval ma być wolniejszy dla import
+      setInfo("Trwa import delta PRG…");
       startPolling(res.job.id, res.job.job_type);
     } catch (e: any) {
       const ae = e as ApiError;
@@ -201,10 +228,14 @@ export default function PrgConfigPage() {
     if (!canAccess) return;
 
     loadState();
+    loadActiveJob(); // ✅ to jest klucz: po powrocie na stronę łapiemy running job i wznawiamy polling
 
     return () => {
       if (pollRef.current) window.clearInterval(pollRef.current);
       pollRef.current = null;
+
+      if (keepaliveRef.current) window.clearInterval(keepaliveRef.current);
+      keepaliveRef.current = null;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [token, canAccess]);
@@ -230,6 +261,47 @@ export default function PrgConfigPage() {
     return percent(stats.bytes_downloaded, stats.bytes_total);
   }, [stats, job]);
 
+  // ✅ MUSI być przed warunkowymi returnami (żeby nie łamać kolejności hooków)
+  const busy = job?.status === "running";
+
+  // KEEPALIVE: tylko gdy job running + jesteśmy na tej stronie
+  useEffect(() => {
+    const clear = () => {
+      if (keepaliveRef.current) window.clearInterval(keepaliveRef.current);
+      keepaliveRef.current = null;
+    };
+
+    if (!token || !canAccess || !busy) {
+      clear();
+      return;
+    }
+
+    async function ping() {
+      const now = Date.now();
+      if (now - lastPingAtRef.current < KEEPALIVE_MS - 500) return;
+      lastPingAtRef.current = now;
+
+      try {
+        await apiFetch("/identity/whoami", {
+          method: "GET",
+          token,
+          onUnauthorized: () => logout(),
+        });
+      } catch {
+        // ignorujemy – jeśli token padnie, polling joba i tak złapie 401 i logout()
+      }
+    }
+
+    ping();
+
+    keepaliveRef.current = window.setInterval(() => {
+      ping();
+    }, KEEPALIVE_MS);
+
+    return clear;
+  }, [token, canAccess, busy, logout]);
+
+  // dopiero TERAZ wolno robić early return
   if (perms.loaded && !canAccess) {
     return (
       <div className="rounded-xl border border-border bg-card p-4">
@@ -238,8 +310,6 @@ export default function PrgConfigPage() {
       </div>
     );
   }
-
-  const busy = job?.status === "running";
 
   return (
     <div className="space-y-4">
