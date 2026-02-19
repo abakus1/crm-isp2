@@ -1,7 +1,8 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Optional, List
+from typing import Optional, List, Dict, Any
+from uuid import UUID
 
 from pydantic import BaseModel, Field
 
@@ -20,12 +21,32 @@ class PrgImportRunIn(BaseModel):
     mode: str = Field(default="delta", description="full|delta")
 
 
-class PrgFetchRunOut(BaseModel):
-    changed: bool
-    filename: Optional[str] = None
-    sha256: Optional[str] = None
-    bytes_downloaded: int
+class PrgJobLogOut(BaseModel):
+    id: int
+    level: str
+    line: str
+    created_at: datetime
+
+
+class PrgJobOut(BaseModel):
+    id: UUID
+    job_type: str
+    status: str
+    stage: Optional[str] = None
     message: Optional[str] = None
+    meta: Dict[str, Any] = Field(default_factory=dict)
+    error: Optional[str] = None
+    started_at: datetime
+    updated_at: datetime
+    finished_at: Optional[datetime] = None
+
+
+class PrgJobWithLogsOut(PrgJobOut):
+    logs: List[PrgJobLogOut] = Field(default_factory=list)
+
+
+class PrgJobStartOut(BaseModel):
+    job: PrgJobOut
 
 
 class PrgImportFileOut(BaseModel):
@@ -48,14 +69,10 @@ class PrgLocalPointCreateIn(BaseModel):
     simc: str
     ulic: Optional[str] = None
     no_street: bool = False
-
     building_no: str
     local_no: Optional[str] = None
-
-    # Postgres POINT: (x,y) = (lon,lat). UI zwykle daje lat/lon.
     lat: float
     lon: float
-
     note: Optional[str] = None
 
 

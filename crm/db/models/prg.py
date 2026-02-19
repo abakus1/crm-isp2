@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from datetime import datetime
 from typing import Any
+import uuid
 
 from sqlalchemy import (
     Boolean,
@@ -13,6 +14,7 @@ from sqlalchemy import (
     Text,
     func,
     text,
+    BigInteger,
 )
 from sqlalchemy.dialects import postgresql
 from sqlalchemy.orm import Mapped, mapped_column, relationship
@@ -62,11 +64,10 @@ class PrgAddressPoint(Base):
     local_no_norm: Mapped[str | None] = mapped_column(String(32), nullable=True)
 
     # surowe współrzędne PRG (PUWG 1992 / EPSG:2180)
-    # PRG często daje X/Y w metrach; trzymamy jako int (metry) – wystarczy i jest stabilne do porównań
     x_1992: Mapped[int | None] = mapped_column(Integer, nullable=True)
     y_1992: Mapped[int | None] = mapped_column(Integer, nullable=True)
 
-    # Postgres POINT: (x,y) = (lon,lat) -> WGS84 / EPSG:4326
+    # Postgres POINT: (x,y) = (lon,lat)
     point: Mapped[tuple[float, float]] = mapped_column(PGPoint(), nullable=False)
 
     note: Mapped[str | None] = mapped_column(Text, nullable=True)
@@ -77,10 +78,8 @@ class PrgAddressPoint(Base):
         nullable=True,
     )
 
-    # IMPORTANT: no union inside string forward-ref (SQLAlchemy evals this)
     merged_into: Mapped["PrgAddressPoint"] = relationship("PrgAddressPoint", remote_side=[id])
 
-    # reconcile metadata
     resolved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     resolved_by_staff_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
     resolved_by_job: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=text("false"))
@@ -99,7 +98,7 @@ class PrgReconcileQueue(Base):
         nullable=False,
     )
 
-    status: Mapped[str] = mapped_column(String(32), nullable=False, server_default=text("'pending'"))  # pending|resolved|rejected
+    status: Mapped[str] = mapped_column(String(32), nullable=False, server_default=text("'pending'"))
     candidates: Mapped[list[dict[str, Any]]] = mapped_column(
         postgresql.JSONB,
         nullable=False,
@@ -121,7 +120,7 @@ class PrgImportFile(Base):
     size_bytes: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("0"))
 
     mode: Mapped[str] = mapped_column(String(16), nullable=False)  # full|delta
-    status: Mapped[str] = mapped_column(String(16), nullable=False, server_default=text("'pending'"))  # pending|processing|done|failed|skipped
+    status: Mapped[str] = mapped_column(String(16), nullable=False, server_default=text("'pending'"))
 
     checksum: Mapped[str] = mapped_column(String(128), nullable=False)
 
@@ -134,3 +133,42 @@ class PrgImportFile(Base):
 
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+
+
+# -------------------------
+# PRG Jobs (live status)
+# -------------------------
+class PrgJob(Base):
+    __tablename__ = "prg_jobs"
+
+    id: Mapped[uuid.UUID] = mapped_column(postgresql.UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+
+    job_type: Mapped[str] = mapped_column(String(16), nullable=False)  # fetch|import|reconcile
+    status: Mapped[str] = mapped_column(String(16), nullable=False, server_default=text("'running'"))
+    stage: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    message: Mapped[str | None] = mapped_column(Text, nullable=True)
+    meta: Mapped[dict[str, Any]] = mapped_column(postgresql.JSONB, nullable=False, server_default=text("'{}'::jsonb"))
+    error: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+    started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+    logs: Mapped[list["PrgJobLog"]] = relationship("PrgJobLog", back_populates="job", cascade="all, delete-orphan")
+
+
+class PrgJobLog(Base):
+    __tablename__ = "prg_job_logs"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    job_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey(f"{Base.metadata.schema}.prg_jobs.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+
+    level: Mapped[str] = mapped_column(String(16), nullable=False, server_default=text("'info'"))
+    line: Mapped[str] = mapped_column(Text, nullable=False)
+
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+    job: Mapped["PrgJob"] = relationship("PrgJob", back_populates="logs")
