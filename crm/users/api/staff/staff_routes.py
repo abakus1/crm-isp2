@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from typing import List, Optional
+from datetime import date
+from typing import Any, List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Header, status
 from pydantic import BaseModel, EmailStr, Field
@@ -17,6 +18,8 @@ from crm.users.services.staff.staff_admin_service import (
     create_staff_user,
     reset_staff_password,
     reset_staff_totp,
+    set_staff_role,
+    update_staff_profile,
     StaffAdminError,
 )
 
@@ -52,6 +55,28 @@ class StaffCreateIn(BaseModel):
 
 class StaffArchiveIn(BaseModel):
     reason: Optional[str] = Field(default=None, max_length=500)
+
+
+class StaffUpdateIn(BaseModel):
+    # profil
+    first_name: Optional[str] = Field(default=None, max_length=80)
+    last_name: Optional[str] = Field(default=None, max_length=120)
+    email: Optional[EmailStr] = None
+    phone_company: Optional[str] = Field(default=None, max_length=32)
+    job_title: Optional[str] = Field(default=None, max_length=120)
+    birth_date: Optional[date] = None
+    pesel: Optional[str] = Field(default=None, max_length=11)
+    id_document_no: Optional[str] = Field(default=None, max_length=32)
+    address_registered: Optional[str] = None
+    address_current: Optional[str] = None
+    address_current_same_as_registered: Optional[bool] = None
+
+    # bezpieczeństwo (policy: admin może wymusić/zdjąć requirement MFA)
+    mfa_required: Optional[bool] = None
+
+
+class StaffRoleUpdateIn(BaseModel):
+    role: str = Field(..., min_length=1, max_length=64)
 
 
 class StaffOut(BaseModel):
@@ -373,3 +398,70 @@ def admin_unarchive_staff(
         return res.__dict__
     except StaffAccessError as e:
         raise HTTPException(status_code=400, detail=str(e))
+
+
+@router.put(
+    "/{staff_id}",
+    response_model=StaffOut,
+    dependencies=[Depends(require(Action.STAFF_UPDATE))],
+)
+def admin_update_staff_profile(
+    staff_id: int,
+    payload: StaffUpdateIn,
+    request: Request,
+    db: Session = Depends(get_db),
+    _me: StaffUser = Depends(get_current_user),
+):
+    u = _get_staff_or_404(db, staff_id)
+
+    # self-edit przez ten endpoint blokujemy twardo (policy: pracownik nie edytuje siebie)
+    if int(_me.id) == int(u.id):
+        raise HTTPException(status_code=403, detail="Self-edit jest zabroniony")
+
+    # patch tylko dla pól które przyszły (exclude_unset)
+    patch: dict[str, Any] = payload.model_dump(exclude_unset=True)
+
+    try:
+        update_staff_profile(
+            db,
+            actor_staff_id=int(_me.id),
+            target=u,
+            patch=patch,
+        )
+        db.commit()
+        db.refresh(u)
+        return StaffOut.from_model(u)
+    except StaffAdminError as e:
+        db.rollback()
+        raise HTTPException(status_code=400, detail=str(e)) from e
+
+
+@router.put(
+    "/{staff_id}/role",
+    response_model=StaffOut,
+    dependencies=[Depends(require(Action.STAFF_ROLE_SET))],
+)
+def admin_set_staff_role(
+    staff_id: int,
+    payload: StaffRoleUpdateIn,
+    db: Session = Depends(get_db),
+    _me: StaffUser = Depends(get_current_user),
+):
+    u = _get_staff_or_404(db, staff_id)
+
+    if int(_me.id) == int(u.id):
+        raise HTTPException(status_code=403, detail="Nie zmieniasz sobie roli 😅")
+
+    try:
+        set_staff_role(
+            db,
+            actor_staff_id=int(_me.id),
+            target=u,
+            role_code=payload.role,
+        )
+        db.commit()
+        db.refresh(u)
+        return StaffOut.from_model(u)
+    except StaffAdminError as e:
+        db.rollback()
+        raise HTTPException(status_code=400, detail=str(e)) from e

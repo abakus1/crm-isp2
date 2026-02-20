@@ -1,11 +1,22 @@
 // frontend/crm-web/src/lib/api.ts
 const BASE = process.env.NEXT_PUBLIC_API_BASE_URL;
 
-export type ApiError = {
+/**
+ * ApiError musi być runtime exportem, bo Next.js (SSR) rozwiązuje importy w runtime.
+ * Wcześniej było `export type ApiError`, co znika po kompilacji TS -> JS
+ * i powodowało błąd: "Export ApiError doesn't exist".
+ */
+export class ApiError extends Error {
   status: number;
-  message: string;
   detail?: any;
-};
+
+  constructor(status: number, message: string, detail?: any) {
+    super(message);
+    this.name = "ApiError";
+    this.status = status;
+    this.detail = detail;
+  }
+}
 
 type JsonBody = Record<string, any>;
 
@@ -30,11 +41,7 @@ function isFormData(value: any): value is FormData {
 
 export async function apiFetch<T>(path: string, opts: ApiFetchOptions = {}): Promise<T> {
   if (!BASE) {
-    throw {
-      status: 0,
-      message: "NEXT_PUBLIC_API_BASE_URL is not set",
-      detail: null,
-    } as ApiError;
+    throw new ApiError(0, "NEXT_PUBLIC_API_BASE_URL is not set", null);
   }
 
   const url = `${BASE}${path}`;
@@ -42,20 +49,18 @@ export async function apiFetch<T>(path: string, opts: ApiFetchOptions = {}): Pro
 
   let requestBody: any = opts.body;
 
-  // ✅ 1) plain object → JSON.stringify + application/json
+  // 1) plain object → JSON.stringify + application/json
   if (isPlainObject(requestBody)) {
     if (!headers.has("Content-Type")) headers.set("Content-Type", "application/json");
     requestBody = JSON.stringify(requestBody);
   }
 
-  // ✅ 2) string body (np. już zrobione JSON.stringify w miejscu wywołania)
-  // Ustawiamy JSON Content-Type, bo backend tego oczekuje.
-  // (Nie dotykamy, jeśli ktoś celowo ustawił inaczej)
+  // 2) string body (np. JSON.stringify zrobione wcześniej)
   if (typeof requestBody === "string") {
     if (!headers.has("Content-Type")) headers.set("Content-Type", "application/json");
   }
 
-  // ✅ 3) FormData → NIE ustawiamy Content-Type (boundary robi przeglądarka)
+  // 3) FormData → NIE ustawiamy Content-Type (boundary robi przeglądarka)
   if (isFormData(requestBody)) {
     headers.delete("Content-Type");
   }
@@ -79,11 +84,7 @@ export async function apiFetch<T>(path: string, opts: ApiFetchOptions = {}): Pro
         ? String(responseBody.detail)
         : `HTTP ${res.status}`;
 
-    throw {
-      status: res.status,
-      message: msg,
-      detail: responseBody,
-    } as ApiError;
+    throw new ApiError(res.status, msg, responseBody);
   }
 
   return responseBody as T;

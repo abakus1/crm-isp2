@@ -5,6 +5,7 @@ import { useEffect, useMemo, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
 import { apiFetch, ApiError } from "@/lib/api";
 import { useAuth } from "@/lib/auth";
+import { usePermissions } from "@/lib/permissions";
 
 type StaffOut = {
   id: number;
@@ -61,6 +62,7 @@ function FieldRow({ label, value }: { label: string; value?: string | null }) {
 
 export default function StaffDetailsPage() {
   const { token, logout } = useAuth();
+  const perms = usePermissions();
   const router = useRouter();
   const params = useParams();
   const staffId = Number(params?.id);
@@ -116,6 +118,9 @@ export default function StaffDetailsPage() {
       }
 
       // admin/uprawniony: /staff/{id}
+      if (!perms.has("staff.read")) {
+        throw new ApiError(403, "Brak uprawnienia: staff.read");
+      }
       const data = await apiFetch<StaffOut>(`/staff/${staffId}`, {
         method: "GET",
         token,
@@ -157,7 +162,14 @@ export default function StaffDetailsPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [token, staffId]);
 
-  const canManage = me?.role === "admin"; // na dziś: admin. Potem podepniemy to pod per-action permissions.
+  const canManage = perms.hasAny([
+    "staff.update",
+    "staff.role.set",
+    "staff.permissions.read",
+    "staff.permissions.write",
+    "staff.reset_password",
+    "staff.reset_totp",
+  ]);
   const isSelf = me?.staff_id === staffId;
 
   const fullName = useMemo(() => {
@@ -174,7 +186,7 @@ export default function StaffDetailsPage() {
         <div>
           <div className="text-sm font-semibold">Pracownik: {fullName}</div>
           <div className="text-xs text-muted-foreground">
-            Read-only. Edycję profilu i granularne permissions zrobimy w kolejnym kroku.
+            Self-service (hasło/TOTP/email) jest w "Moje konto". Zarządzanie pracownikiem wymaga uprawnień.
           </div>
         </div>
 
@@ -198,16 +210,25 @@ export default function StaffDetailsPage() {
 
       {/* Top actions */}
       <div className="flex flex-wrap items-center gap-2">
-        {canManage && (
+        {isSelf && (
+          <Link
+            href="/settings"
+            className="rounded-md border border-border px-3 py-2 text-sm hover:bg-muted/60"
+          >
+            Moje konto
+          </Link>
+        )}
+
+        {canManage && !isSelf && (
           <Link
             href={`/staff/${staffId}/permission`}
             className="rounded-md border border-border px-3 py-2 text-sm hover:bg-muted/60"
           >
-            Uprawnienia
+            Zarządzaj
           </Link>
         )}
 
-        {(canManage || isSelf) && (
+        {!isSelf && perms.has("staff.reset_password") && (
           <button
             onClick={() => postAction(`/staff/${staffId}/reset-password`, "Hasło zresetowane (mail best-effort).")}
             disabled={busy}
@@ -217,7 +238,7 @@ export default function StaffDetailsPage() {
           </button>
         )}
 
-        {(canManage || isSelf) && (
+        {!isSelf && perms.has("staff.reset_totp") && (
           <button
             onClick={() => postAction(`/staff/${staffId}/reset-totp`, "TOTP zresetowane. Przy następnym logowaniu będzie setup.")}
             disabled={busy}

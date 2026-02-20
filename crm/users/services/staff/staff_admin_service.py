@@ -3,8 +3,8 @@ from __future__ import annotations
 
 import secrets
 import string
-from datetime import datetime, timezone
-from typing import Optional
+from datetime import date, datetime, timezone
+from typing import Any, Dict, Optional
 
 import sqlalchemy as sa
 from sqlalchemy.exc import IntegrityError
@@ -385,3 +385,198 @@ def reset_staff_totp(db: Session, *, staff_user: StaffUser, reset_by_staff_id: i
         )
 
     db.commit()
+
+
+def update_staff_profile(
+    db: Session,
+    *,
+    actor_staff_id: int,
+    target: StaffUser,
+    patch: Dict[str, Any],
+) -> StaffUser:
+    """Admin/uprawniony: aktualizacja profilu pracownika.
+
+    Zasada: pracownik NIE edytuje sam siebie (to jest endpoint admin-only).
+    Patch jest walidowany na poziomie API (Pydantic).
+    """
+
+    allowed_fields = {
+        "first_name",
+        "last_name",
+        "email",
+        "phone_company",
+        "job_title",
+        "birth_date",
+        "pesel",
+        "id_document_no",
+        "address_registered",
+        "address_current",
+        "address_current_same_as_registered",
+        "mfa_required",
+    }
+
+    unknown = sorted([k for k in patch.keys() if k not in allowed_fields])
+    if unknown:
+        raise StaffAdminError(f"Nieobsługiwane pola: {', '.join(unknown)}")
+
+    before = {
+        "first_name": target.first_name,
+        "last_name": target.last_name,
+        "email": target.email,
+        "phone_company": target.phone_company,
+        "job_title": target.job_title,
+        "birth_date": target.birth_date.isoformat() if target.birth_date else None,
+        "pesel": target.pesel,
+        "id_document_no": target.id_document_no,
+        "address_registered": target.address_registered,
+        "address_current": target.address_current,
+        "address_current_same_as_registered": bool(target.address_current_same_as_registered),
+        "mfa_required": bool(target.mfa_required),
+    }
+
+    # email uniqueness (case-insensitive)
+    if "email" in patch:
+        new_email = (patch.get("email") or "").strip().lower() or None
+        if new_email is not None:
+            if "@" not in new_email:
+                raise StaffAdminError("Invalid email")
+
+            email_exists = (
+                db.query(StaffUser)
+                .filter(StaffUser.id != int(target.id))
+                .filter(StaffUser.email.isnot(None))
+                .filter(sa.func.lower(StaffUser.email) == new_email)
+                .first()
+            )
+            if email_exists:
+                raise StaffAdminError("Email already exists")
+
+        patch["email"] = new_email
+
+    # normalize strings
+    for key in [
+        "first_name",
+        "last_name",
+        "phone_company",
+        "job_title",
+        "pesel",
+        "id_document_no",
+        "address_registered",
+        "address_current",
+    ]:
+        if key in patch:
+            val = patch.get(key)
+            if val is None:
+                continue
+            s = str(val).strip()
+            patch[key] = s or None
+
+    # birth_date: accept date instance or iso str (api already parses to date)
+    if "birth_date" in patch and patch["birth_date"] is not None:
+        bd = patch["birth_date"]
+        if isinstance(bd, str):
+            try:
+                patch["birth_date"] = date.fromisoformat(bd)
+            except ValueError as e:
+                raise StaffAdminError("Invalid birth_date") from e
+
+    # apply
+    for k, v in patch.items():
+        setattr(target, k, v)
+
+    target.updated_at = _now()
+
+    after = {
+        "first_name": target.first_name,
+        "last_name": target.last_name,
+        "email": target.email,
+        "phone_company": target.phone_company,
+        "job_title": target.job_title,
+        "birth_date": target.birth_date.isoformat() if target.birth_date else None,
+        "pesel": target.pesel,
+        "id_document_no": target.id_document_no,
+        "address_registered": target.address_registered,
+        "address_current": target.address_current,
+        "address_current_same_as_registered": bool(target.address_current_same_as_registered),
+        "mfa_required": bool(target.mfa_required),
+    }
+
+    _audit(
+        db=db,
+        staff_user_id=int(actor_staff_id),
+        severity="info",
+        action="STAFF_UPDATE",
+        entity_type="staff_users",
+        entity_id=str(target.id),
+        before=before,
+        after=after,
+        meta={"fields": sorted(list(patch.keys()))},
+    )
+    _activity(
+        db=db,
+        staff_user_id=int(actor_staff_id),
+        action="STAFF_UPDATE",
+        message=f"Zaktualizowano dane pracownika {target.username}",
+        entity_type="staff_users",
+        entity_id=str(target.id),
+    )
+
+    db.flush()
+    return target
+
+
+def set_staff_role(
+    db: Session,
+    *,
+    actor_staff_id: int,
+    target: StaffUser,
+    role_code: str,
+) -> StaffUser:
+    role_code = (role_code or "").strip()
+    if not role_code:
+        raise StaffAdminError("Role is required")
+
+    if not role_exists(db, role_code=role_code):
+        raise StaffAdminError("Nieznana rola")
+
+    if str(target.role) == role_code:
+        return target
+
+    before = {
+        "role": str(target.role),
+        "token_version": int(target.token_version),
+    }
+
+    target.role = role_code
+    # wymuś relogin żeby nowe uprawnienia zadziałały natychmiast
+    target.token_version = int(target.token_version) + 1
+    target.updated_at = _now()
+
+    after = {
+        "role": str(target.role),
+        "token_version": int(target.token_version),
+    }
+
+    _audit(
+        db=db,
+        staff_user_id=int(actor_staff_id),
+        severity="critical",
+        action="STAFF_ROLE_SET",
+        entity_type="staff_users",
+        entity_id=str(target.id),
+        before=before,
+        after=after,
+        meta={"role": role_code},
+    )
+    _activity(
+        db=db,
+        staff_user_id=int(actor_staff_id),
+        action="STAFF_ROLE_SET",
+        message=f"Zmieniono rolę pracownika {target.username} na {role_code}",
+        entity_type="staff_users",
+        entity_id=str(target.id),
+        meta={"role": role_code},
+    )
+
+    db.flush()
+    return target
