@@ -143,6 +143,15 @@ class PrgStreetSuggestOut(BaseModel):
     buildings_count: int = 0
 
 
+class PrgStreetGlobalSuggestOut(BaseModel):
+    street_name: str
+    ulic: str
+    place_name: str
+    terc: str
+    simc: str
+    buildings_count: int = 0
+
+
 class PrgBuildingOut(BaseModel):
     building_no: str
     terc: str

@@ -26,6 +26,7 @@ from crm.prg.schemas import (
     PrgJobLogOut,
     PrgPlaceSuggestOut,
     PrgStreetSuggestOut,
+    PrgStreetGlobalSuggestOut,
     PrgBuildingOut,
 )
 from crm.prg.services.prg_service import PrgService, PrgError
@@ -481,7 +482,11 @@ def prg_lookup_places(
 def prg_lookup_streets(
     terc: str = Query(..., min_length=1, max_length=8),
     simc: str = Query(..., min_length=1, max_length=8),
-    q: str = Query("", max_length=64, description="Prefix nazwy ulicy"),
+    q: str = Query(
+        "",
+        max_length=64,
+        description="Fraza nazwy ulicy: słowa mogą występować w dowolnym miejscu (np. 'Jana Pawła')",
+    ),
     limit: int = Query(default=50, ge=1, le=200),
     db: Session = Depends(get_db),
     _me: StaffUser = Depends(require(Action.PRG_IMPORT_RUN)),
@@ -500,8 +505,11 @@ def prg_lookup_streets(
         .where(PrgAdruniBuildingNumber.street_name.is_not(None))
     )
 
+    # ✅ Leniwe wyszukiwanie: każde słowo musi wystąpić gdziekolwiek w nazwie
     if qq:
-        stmt = stmt.where(func.lower(PrgAdruniBuildingNumber.street_name).like(func.lower(qq) + "%"))
+        terms = [t for t in qq.split() if t]
+        for t in terms:
+            stmt = stmt.where(func.lower(PrgAdruniBuildingNumber.street_name).like("%" + t.lower() + "%"))
 
     rows = db.execute(
         stmt.group_by(PrgAdruniBuildingNumber.street_name, PrgAdruniBuildingNumber.ulic)
@@ -514,6 +522,76 @@ def prg_lookup_streets(
             street_name=str(r[0]),
             ulic=str(r[1]),
             buildings_count=int(r[2] or 0),
+        )
+        for r in rows
+    ]
+
+
+@router.get("/lookup/streets-global", response_model=list[PrgStreetGlobalSuggestOut])
+def prg_lookup_streets_global(
+    q: str = Query(
+        ...,
+        min_length=2,
+        max_length=64,
+        description="Fraza nazwy ulicy: słowa w dowolnym miejscu (np. 'Jana Pawła')",
+    ),
+    place: str = Query(
+        "",
+        max_length=64,
+        description="Opcjonalnie: lokalizacja/miejscowość (też po słowach, a nie tylko prefix)",
+    ),
+    limit: int = Query(default=50, ge=1, le=200),
+    db: Session = Depends(get_db),
+    _me: StaffUser = Depends(require(Action.PRG_IMPORT_RUN)),
+):
+    qq = _norm_q(q)
+    pq = _norm_q(place)
+
+    stmt = (
+        select(
+            PrgAdruniBuildingNumber.street_name,
+            PrgAdruniBuildingNumber.ulic,
+            PrgAdruniBuildingNumber.place_name,
+            PrgAdruniBuildingNumber.terc,
+            PrgAdruniBuildingNumber.simc,
+            func.count().label("cnt"),
+        )
+        .where(PrgAdruniBuildingNumber.ulic.is_not(None))
+        .where(PrgAdruniBuildingNumber.street_name.is_not(None))
+        .where(PrgAdruniBuildingNumber.place_name.is_not(None))
+    )
+
+    # ✅ ulica: tokeny w dowolnym miejscu
+    s_terms = [t for t in qq.split() if t]
+    for t in s_terms:
+        stmt = stmt.where(func.lower(PrgAdruniBuildingNumber.street_name).like("%" + t.lower() + "%"))
+
+    # ✅ place opcjonalnie: tokeny w dowolnym miejscu
+    if pq:
+        p_terms = [t for t in pq.split() if t]
+        for t in p_terms:
+            stmt = stmt.where(func.lower(PrgAdruniBuildingNumber.place_name).like("%" + t.lower() + "%"))
+
+    rows = db.execute(
+        stmt.group_by(
+            PrgAdruniBuildingNumber.street_name,
+            PrgAdruniBuildingNumber.ulic,
+            PrgAdruniBuildingNumber.place_name,
+            PrgAdruniBuildingNumber.terc,
+            PrgAdruniBuildingNumber.simc,
+        )
+        .order_by(func.count().desc())
+        .limit(limit)
+    ).all()
+
+    return [
+        PrgStreetGlobalSuggestOut(
+            street_name=str(r[0]),
+            ulic=str(r[1]),
+            place_name=str(r[2]),
+            terc=str(r[3]),
+            simc=str(r[4]),
+            buildings_count=int(r[5] or 0),
         )
         for r in rows
     ]

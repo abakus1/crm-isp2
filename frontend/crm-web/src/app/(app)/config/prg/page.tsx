@@ -5,6 +5,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { apiFetch, ApiError } from "@/lib/api";
 import { useAuth } from "@/lib/auth";
 import { usePermissions } from "@/lib/permissions";
+import { PrgAddressFinder } from "@/components/PrgAddressFinder";
 
 type PrgState = {
   dataset_version?: string | null;
@@ -99,7 +100,7 @@ export default function PrgConfigPage() {
   const [job, setJob] = useState<PrgJob | null>(null);
   const pollRef = useRef<number | null>(null);
 
-  // ADRUNI lookup UI
+  // ADRUNI lookup UI (stare hooki zostawiamy – ale UI jest w komponencie)
   const [placeQ, setPlaceQ] = useState<string>("");
   const [placeSug, setPlaceSug] = useState<PlaceSuggest[]>([]);
   const [placeLoading, setPlaceLoading] = useState(false);
@@ -134,89 +135,6 @@ export default function PrgConfigPage() {
     }
   }
 
-  async function lookupPlaces(q: string) {
-    if (!token) return;
-    const qq = q.trim();
-    if (qq.length < 2) {
-      setPlaceSug([]);
-      return;
-    }
-
-    setLookupErr(null);
-    setPlaceLoading(true);
-    try {
-      const res = await apiFetch<PlaceSuggest[]>(
-        `/prg/lookup/places?q=${encodeURIComponent(qq)}&limit=20`,
-        {
-          method: "GET",
-          token,
-          onUnauthorized: () => logout(),
-        }
-      );
-      setPlaceSug(res || []);
-    } catch (e: any) {
-      const ae = e as ApiError;
-      setLookupErr(ae?.message || "Błąd wyszukiwania miejscowości");
-    } finally {
-      setPlaceLoading(false);
-    }
-  }
-
-  async function lookupStreets(terc: string, simc: string, q: string) {
-    if (!token) return;
-    const qq = q.trim();
-    if (qq.length < 1) {
-      setStreetSug([]);
-      return;
-    }
-
-    setLookupErr(null);
-    setStreetLoading(true);
-    try {
-      const res = await apiFetch<StreetSuggest[]>(
-        `/prg/lookup/streets?terc=${encodeURIComponent(terc)}&simc=${encodeURIComponent(
-          simc
-        )}&q=${encodeURIComponent(qq)}&limit=50`,
-        {
-          method: "GET",
-          token,
-          onUnauthorized: () => logout(),
-        }
-      );
-      setStreetSug(res || []);
-    } catch (e: any) {
-      const ae = e as ApiError;
-      setLookupErr(ae?.message || "Błąd wyszukiwania ulic");
-    } finally {
-      setStreetLoading(false);
-    }
-  }
-
-  async function lookupBuildings(terc: string, simc: string, ulic: string) {
-    if (!token) return;
-    setLookupErr(null);
-    setBuildingsLoading(true);
-    try {
-      const res = await apiFetch<BuildingRow[]>(
-        `/prg/lookup/buildings?terc=${encodeURIComponent(terc)}&simc=${encodeURIComponent(
-          simc
-        )}&ulic=${encodeURIComponent(ulic)}&limit=2000`,
-        {
-          method: "GET",
-          token,
-          onUnauthorized: () => logout(),
-        }
-      );
-      setBuildings(res || []);
-    } catch (e: any) {
-      const ae = e as ApiError;
-      setLookupErr(ae?.message || "Błąd pobierania budynków");
-      setBuildings([]);
-    } finally {
-      setBuildingsLoading(false);
-    }
-  }
-
   async function loadJob(jobId: string) {
     if (!token) return;
 
@@ -228,7 +146,6 @@ export default function PrgConfigPage() {
 
     setJob(j);
 
-    // czyścimy "Start ..." jak już job jest w toku / skończony
     if (j.status === "running" || (j.status === "cancelled" && !j.finished_at)) {
       setInfo(null);
     }
@@ -236,9 +153,7 @@ export default function PrgConfigPage() {
     if (!(j.status === "running" || (j.status === "cancelled" && !j.finished_at))) {
       if (pollRef.current) window.clearInterval(pollRef.current);
       pollRef.current = null;
-      // po zakończeniu odśwież stan datasetu
       await loadState();
-      // i nie trzymaj w UI starego "Start ..."
       setInfo(null);
     }
   }
@@ -246,13 +161,9 @@ export default function PrgConfigPage() {
   function startPolling(jobId: string, jobType?: PrgJob["job_type"]) {
     if (pollRef.current) window.clearInterval(pollRef.current);
 
-    // fetch potrafi skończyć szybciej niż 1s; import może być długi -> wolniej
     const interval = jobType === "fetch" ? 250 : 1000;
 
-    // 1) od razu
     loadJob(jobId).catch(() => {});
-
-    // 2) potem co interval
     pollRef.current = window.setInterval(() => {
       loadJob(jobId).catch(() => {});
     }, interval);
@@ -273,7 +184,7 @@ export default function PrgConfigPage() {
         startPolling(j.id, j.job_type);
       }
     } catch {
-      // ignorujemy – UI ma działać nawet jeśli endpoint chwilowo nie działa
+      // ignore
     }
   }
 
@@ -336,7 +247,6 @@ export default function PrgConfigPage() {
       });
 
       setInfo("Zlecono przerwanie joba…");
-      // odświeżymy joba przez polling; jeśli go nie mamy, spróbuj złapać aktywny
       if (job?.id) startPolling(job.id, job.job_type);
       else loadActiveJob();
     } catch (e: any) {
@@ -371,7 +281,7 @@ export default function PrgConfigPage() {
     if (!canAccess) return;
 
     loadState();
-    loadActiveJob(); // ✅ po powrocie na stronę łapiemy running/cancelling job i wznawiamy polling
+    loadActiveJob();
 
     return () => {
       if (pollRef.current) window.clearInterval(pollRef.current);
@@ -382,40 +292,6 @@ export default function PrgConfigPage() {
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [token, canAccess]);
-
-  // Debounce: miejscowość
-  useEffect(() => {
-    if (!token || !canAccess) return;
-    const t = window.setTimeout(() => {
-      // jeśli ktoś już wybrał miejscowość, a potem edytuje tekst — kasujemy wybór
-      if (placePicked && placePicked.place_name !== placeQ.trim()) {
-        setPlacePicked(null);
-        setStreetPicked(null);
-        setStreetQ("");
-        setStreetSug([]);
-        setBuildings([]);
-      }
-      lookupPlaces(placeQ);
-    }, 250);
-    return () => window.clearTimeout(t);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [placeQ, token, canAccess]);
-
-  // Debounce: ulica
-  useEffect(() => {
-    if (!token || !canAccess) return;
-    if (!placePicked) return;
-
-    const t = window.setTimeout(() => {
-      if (streetPicked && streetPicked.street_name !== streetQ.trim()) {
-        setStreetPicked(null);
-        setBuildings([]);
-      }
-      lookupStreets(placePicked.terc, placePicked.simc, streetQ);
-    }, 200);
-    return () => window.clearTimeout(t);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [streetQ, placePicked, token, canAccess]);
 
   const stats = useMemo(() => {
     if (!job) return null;
@@ -438,10 +314,8 @@ export default function PrgConfigPage() {
     return percent(stats.bytes_downloaded, stats.bytes_total);
   }, [stats, job]);
 
-  // ✅ MUSI być przed warunkowymi returnami (żeby nie łamać kolejności hooków)
   const busy = job ? (job.status === "running" || (job.status === "cancelled" && !job.finished_at)) : false;
 
-  // KEEPALIVE: tylko gdy job running + jesteśmy na tej stronie
   useEffect(() => {
     const clear = () => {
       if (keepaliveRef.current) window.clearInterval(keepaliveRef.current);
@@ -465,7 +339,7 @@ export default function PrgConfigPage() {
           onUnauthorized: () => logout(),
         });
       } catch {
-        // ignorujemy – jeśli token padnie, polling joba i tak złapie 401 i logout()
+        // ignore
       }
     }
 
@@ -478,7 +352,6 @@ export default function PrgConfigPage() {
     return clear;
   }, [token, canAccess, busy, logout]);
 
-  // dopiero TERAZ wolno robić early return
   if (perms.loaded && !canAccess) {
     return (
       <div className="rounded-xl border border-border bg-card p-4">
@@ -497,13 +370,9 @@ export default function PrgConfigPage() {
         </div>
       </div>
 
-      {err && (
-        <div className="rounded-xl border border-border bg-card p-4 text-sm text-red-600">{err}</div>
-      )}
+      {err && <div className="rounded-xl border border-border bg-card p-4 text-sm text-red-600">{err}</div>}
 
-      {info && (
-        <div className="rounded-xl border border-border bg-card p-4 text-sm text-foreground">{info}</div>
-      )}
+      {info && <div className="rounded-xl border border-border bg-card p-4 text-sm text-foreground">{info}</div>}
 
       {job && (
         <div className="rounded-xl border border-border bg-card p-4 space-y-3">
@@ -522,7 +391,6 @@ export default function PrgConfigPage() {
             </div>
           )}
 
-          {/* PROGRESS BAR dla FETCH */}
           {job.job_type === "fetch" && fetchPct !== null && (
             <div className="space-y-1">
               <div className="flex items-center justify-between text-xs text-muted-foreground">
@@ -530,10 +398,7 @@ export default function PrgConfigPage() {
                 <div>{fetchPct}%</div>
               </div>
               <div className="h-2 w-full overflow-hidden rounded-full bg-muted">
-                <div
-                  className="h-2 rounded-full bg-foreground transition-all"
-                  style={{ width: `${fetchPct}%` }}
-                />
+                <div className="h-2 rounded-full bg-foreground transition-all" style={{ width: `${fetchPct}%` }} />
               </div>
             </div>
           )}
@@ -548,10 +413,7 @@ export default function PrgConfigPage() {
                     Pobrano: {fmtBytes(stats.bytes_downloaded)}
                     {stats.bytes_total ? ` / ${fmtBytes(stats.bytes_total)}` : ""}
                   </div>
-                  <div>
-                    Zmienione:{" "}
-                    {stats.changed === undefined ? "—" : stats.changed ? "tak" : "nie"}
-                  </div>
+                  <div>Zmienione: {stats.changed === undefined ? "—" : stats.changed ? "tak" : "nie"}</div>
                   <div>SHA: {stats.sha256 ? String(stats.sha256).slice(0, 16) + "…" : "—"}</div>
                 </>
               ) : (
@@ -625,178 +487,8 @@ export default function PrgConfigPage() {
         </button>
       </div>
 
-      {/* WYSZUKIWARKA LOKALIZACJI */}
-      <div className="rounded-xl border border-border bg-card p-4 space-y-3">
-        <div className="text-sm font-semibold">Wyszukiwarka lokalizacji (PRG)</div>
-        <div className="text-xs text-muted-foreground">
-          Flow: miejscowość → ulica → lista budynków (z kodami TERC/SIMC/ULIC). Działa na ADRUNI.
-        </div>
-
-        {lookupErr && (
-          <div className="rounded-md border border-red-200 bg-red-50 p-3 text-sm text-red-700">{lookupErr}</div>
-        )}
-
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-          <div className="space-y-2">
-            <label className="text-xs font-medium text-muted-foreground">Miejscowość</label>
-            <input
-              className="w-full rounded-md border border-border bg-background px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-foreground/20"
-              placeholder="np. Kraków…"
-              value={placeQ}
-              onChange={(e) => setPlaceQ(e.target.value)}
-            />
-
-            <div className="text-xs text-muted-foreground flex items-center justify-between">
-              <div>
-                {placePicked ? (
-                  <span>
-                    Wybrano: <span className="font-medium text-foreground">{placePicked.place_name}</span> • TERC{" "}
-                    {placePicked.terc} • SIMC {placePicked.simc}
-                  </span>
-                ) : (
-                  <span>Wpisz min. 2 znaki, żeby podpowiedziało miejscowości.</span>
-                )}
-              </div>
-              <div>{placeLoading ? "szukam…" : null}</div>
-            </div>
-
-            {!placePicked && placeSug.length > 0 && (
-              <div className="max-h-48 overflow-auto rounded-md border border-border bg-background">
-                {placeSug.map((p) => (
-                  <button
-                    key={`${p.terc}-${p.simc}-${p.place_name}`}
-                    type="button"
-                    className="w-full px-3 py-2 text-left text-sm hover:bg-muted/40"
-                    onClick={() => {
-                      setPlacePicked(p);
-                      setPlaceQ(p.place_name);
-                      setPlaceSug([]);
-                      setStreetPicked(null);
-                      setStreetQ("");
-                      setStreetSug([]);
-                      setBuildings([]);
-                    }}
-                  >
-                    <div className="flex items-center justify-between">
-                      <div className="font-medium">{p.place_name}</div>
-                      <div className="text-xs text-muted-foreground">{fmt(p.buildings_count)} bud.</div>
-                    </div>
-                    <div className="text-xs text-muted-foreground">TERC {p.terc} • SIMC {p.simc}</div>
-                  </button>
-                ))}
-              </div>
-            )}
-          </div>
-
-          <div className="space-y-2">
-            <label className="text-xs font-medium text-muted-foreground">Ulica</label>
-            <input
-              className="w-full rounded-md border border-border bg-background px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-foreground/20 disabled:opacity-50"
-              placeholder={placePicked ? "np. Długa…" : "Najpierw wybierz miejscowość"}
-              value={streetQ}
-              onChange={(e) => setStreetQ(e.target.value)}
-              disabled={!placePicked}
-            />
-
-            <div className="text-xs text-muted-foreground flex items-center justify-between">
-              <div>
-                {streetPicked ? (
-                  <span>
-                    Wybrano: <span className="font-medium text-foreground">{streetPicked.street_name}</span> • ULIC{" "}
-                    {streetPicked.ulic}
-                  </span>
-                ) : (
-                  <span>Wpisuj litery — dostaniesz listę ulic.</span>
-                )}
-              </div>
-              <div>{streetLoading ? "szukam…" : null}</div>
-            </div>
-
-            {placePicked && !streetPicked && streetSug.length > 0 && (
-              <div className="max-h-48 overflow-auto rounded-md border border-border bg-background">
-                {streetSug.map((s) => (
-                  <button
-                    key={`${s.ulic}-${s.street_name}`}
-                    type="button"
-                    className="w-full px-3 py-2 text-left text-sm hover:bg-muted/40"
-                    onClick={() => {
-                      setStreetPicked(s);
-                      setStreetQ(s.street_name);
-                      setStreetSug([]);
-                      setBuildings([]);
-                      lookupBuildings(placePicked.terc, placePicked.simc, s.ulic);
-                    }}
-                  >
-                    <div className="flex items-center justify-between">
-                      <div className="font-medium">{s.street_name}</div>
-                      <div className="text-xs text-muted-foreground">{fmt(s.buildings_count)} bud.</div>
-                    </div>
-                    <div className="text-xs text-muted-foreground">ULIC {s.ulic}</div>
-                  </button>
-                ))}
-              </div>
-            )}
-          </div>
-        </div>
-
-        <div className="flex items-center gap-2">
-          <button
-            type="button"
-            className="rounded-md border border-border bg-background px-3 py-2 text-sm hover:bg-muted/40"
-            onClick={() => {
-              setPlaceQ("");
-              setPlaceSug([]);
-              setPlacePicked(null);
-              setStreetQ("");
-              setStreetSug([]);
-              setStreetPicked(null);
-              setBuildings([]);
-              setLookupErr(null);
-            }}
-          >
-            Wyczyść
-          </button>
-
-          <div className="text-xs text-muted-foreground">
-            {buildingsLoading ? "Ładuję budynki…" : buildings.length > 0 ? `Budynki: ${fmt(buildings.length)}` : null}
-          </div>
-        </div>
-
-        {placePicked && streetPicked && (
-          <div className="rounded-md border border-border bg-background p-3">
-            <div className="text-xs font-semibold text-muted-foreground mb-2">Budynki na ulicy</div>
-
-            {buildingsLoading ? (
-              <div className="text-sm text-muted-foreground">Ładowanie…</div>
-            ) : buildings.length === 0 ? (
-              <div className="text-sm text-muted-foreground">Brak wyników.</div>
-            ) : (
-              <div className="max-h-72 overflow-auto">
-                <table className="w-full text-sm">
-                  <thead className="sticky top-0 bg-background">
-                    <tr className="text-left text-xs text-muted-foreground">
-                      <th className="py-2 pr-3">Nr budynku</th>
-                      <th className="py-2 pr-3">TERC</th>
-                      <th className="py-2 pr-3">SIMC</th>
-                      <th className="py-2 pr-3">ULIC</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {buildings.map((b, idx) => (
-                      <tr key={`${b.building_no}-${idx}`} className="border-t border-border">
-                        <td className="py-2 pr-3 font-medium">{b.building_no}</td>
-                        <td className="py-2 pr-3 font-mono text-xs">{b.terc}</td>
-                        <td className="py-2 pr-3 font-mono text-xs">{b.simc}</td>
-                        <td className="py-2 pr-3 font-mono text-xs">{b.ulic || "—"}</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            )}
-          </div>
-        )}
-      </div>
+      {/* Uniwersalny komponent – nie tylko dla PRG */}
+      <PrgAddressFinder />
 
       <div className="text-xs text-muted-foreground">
         Tip: kliknij <span className="font-medium">Pobierz</span> → jeśli “Zmienione: tak”, kliknij{" "}
