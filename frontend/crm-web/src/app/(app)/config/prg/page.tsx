@@ -13,6 +13,7 @@ type PrgState = {
   last_reconcile_at?: string | null;
   source_url?: string | null;
   checksum?: string | null;
+  address_points_count?: number | null;
 };
 
 type JobLog = {
@@ -25,7 +26,7 @@ type JobLog = {
 type PrgJob = {
   id: string;
   job_type: "fetch" | "import" | "reconcile";
-  status: "running" | "success" | "failed" | "skipped";
+  status: "running" | "success" | "failed" | "skipped" | "cancelled";
   stage?: string | null;
   message?: string | null;
   meta: Record<string, any>;
@@ -108,11 +109,11 @@ export default function PrgConfigPage() {
     setJob(j);
 
     // czyścimy "Start ..." jak już job jest w toku / skończony
-    if (j.status === "running") {
+    if (j.status === "running" || (j.status === "cancelled" && !j.finished_at)) {
       setInfo(null);
     }
 
-    if (j.status !== "running") {
+    if (!(j.status === "running" || (j.status === "cancelled" && !j.finished_at))) {
       if (pollRef.current) window.clearInterval(pollRef.current);
       pollRef.current = null;
       // po zakończeniu odśwież stan datasetu
@@ -146,7 +147,7 @@ export default function PrgConfigPage() {
         onUnauthorized: () => logout(),
       });
 
-      if (j && j.status === "running") {
+      if (j && (j.status === "running" || (j.status === "cancelled" && !j.finished_at))) {
         setJob(j);
         setInfo(null);
         startPolling(j.id, j.job_type);
@@ -202,6 +203,28 @@ export default function PrgConfigPage() {
     }
   }
 
+  async function cancelActiveJob() {
+    if (!token) return;
+    setErr(null);
+
+    try {
+      await apiFetch("/prg/jobs/cancel", {
+        method: "POST",
+        token,
+        body: {},
+        onUnauthorized: () => logout(),
+      });
+
+      setInfo("Zlecono przerwanie joba…");
+      // odświeżymy joba przez polling; jeśli go nie mamy, spróbuj złapać aktywny
+      if (job?.id) startPolling(job.id, job.job_type);
+      else loadActiveJob();
+    } catch (e: any) {
+      const ae = e as ApiError;
+      setErr(ae?.message || "Błąd");
+    }
+  }
+
   async function runReconcile() {
     if (!token) return;
     setErr(null);
@@ -228,7 +251,7 @@ export default function PrgConfigPage() {
     if (!canAccess) return;
 
     loadState();
-    loadActiveJob(); // ✅ to jest klucz: po powrocie na stronę łapiemy running job i wznawiamy polling
+    loadActiveJob(); // ✅ po powrocie na stronę łapiemy running/cancelling job i wznawiamy polling
 
     return () => {
       if (pollRef.current) window.clearInterval(pollRef.current);
@@ -262,7 +285,7 @@ export default function PrgConfigPage() {
   }, [stats, job]);
 
   // ✅ MUSI być przed warunkowymi returnami (żeby nie łamać kolejności hooków)
-  const busy = job?.status === "running";
+  const busy = job ? (job.status === "running" || (job.status === "cancelled" && !job.finished_at)) : false;
 
   // KEEPALIVE: tylko gdy job running + jesteśmy na tej stronie
   useEffect(() => {
@@ -408,9 +431,10 @@ export default function PrgConfigPage() {
         <div className="text-sm">Ostatni import: {state?.last_import_at || "—"}</div>
         <div className="text-sm">Ostatnia delta: {state?.last_delta_at || "—"}</div>
         <div className="text-sm">Ostatni reconcile: {state?.last_reconcile_at || "—"}</div>
+        <div className="text-sm">Punkty adresowe: {state?.address_points_count ?? "—"}</div>
       </div>
 
-      <div className="flex flex-wrap gap-2">
+      <div className="flex flex-wrap items-center gap-2">
         <button
           className="rounded-md border border-border bg-background px-3 py-2 text-sm hover:bg-muted/40 disabled:opacity-50"
           onClick={runFetch}
@@ -433,6 +457,17 @@ export default function PrgConfigPage() {
           disabled={!canReconcile || busy}
         >
           Reconcile (dopasuj lokalne)
+        </button>
+
+        <div className="flex-1" />
+
+        <button
+          className="rounded-md border border-border bg-background px-3 py-2 text-sm hover:bg-muted/40 disabled:opacity-50"
+          onClick={cancelActiveJob}
+          disabled={!busy}
+          title={!busy ? "Brak aktywnego joba" : "Przerwij aktywny job PRG"}
+        >
+          Przerwij
         </button>
       </div>
 

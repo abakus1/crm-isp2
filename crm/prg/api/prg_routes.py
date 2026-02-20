@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Query, BackgroundTasks
 from sqlalchemy.orm import Session
-from sqlalchemy import select
+from sqlalchemy import select, and_, or_, func
 from uuid import UUID
 
 from crm.db.session import get_db
@@ -10,7 +10,7 @@ from crm.db.models.staff import StaffUser
 from crm.users.identity.rbac.actions import Action
 from crm.users.identity.rbac.dependencies import require
 
-from crm.db.models.prg import PrgReconcileQueue, PrgJob, PrgJobLog
+from crm.db.models.prg import PrgReconcileQueue, PrgJob, PrgJobLog, PrgAddressPoint
 from crm.prg.schemas import (
     PrgStateOut,
     PrgImportRunIn,
@@ -77,6 +77,14 @@ def prg_state(
     _me: StaffUser = Depends(require(Action.PRG_IMPORT_RUN)),
 ):
     st = PrgService(db).get_state()
+
+    address_points_count = (
+        db.execute(
+            select(func.count()).select_from(PrgAddressPoint).where(PrgAddressPoint.status == "active")
+        ).scalar_one()
+        or 0
+    )
+
     return PrgStateOut(
         dataset_version=st.dataset_version,
         dataset_updated_at=st.dataset_updated_at,
@@ -85,6 +93,7 @@ def prg_state(
         last_reconcile_at=st.last_reconcile_at,
         source_url=st.source_url,
         checksum=st.checksum,
+        address_points_count=int(address_points_count),
     )
 
 
@@ -121,6 +130,26 @@ def prg_import_run(
         raise HTTPException(status_code=400, detail=str(e))
 
 
+@router.post("/jobs/cancel", response_model=PrgJobOut)
+def prg_jobs_cancel(
+    db: Session = Depends(get_db),
+    me: StaffUser = Depends(require(Action.PRG_IMPORT_RUN)),
+):
+    """Przerywa aktywny job PRG (status='running' → 'cancelled').
+
+    Kontrakt:
+    - ustawiamy status='cancelled' + stage='cancelling'
+    - NIE ustawiamy finished_at tutaj — runner kończy job "czysto" (sprzątanie lock/tmp)
+    """
+    try:
+        job = PrgService(db).cancel_active_job(actor_staff_id=int(me.id))
+        db.commit()
+        return _job_to_out(job)
+    except PrgError as e:
+        db.rollback()
+        raise HTTPException(status_code=400, detail=str(e))
+
+
 @router.get("/jobs/latest", response_model=PrgJobOut)
 def prg_jobs_latest(
     job_type: str = Query(..., description="fetch|import|reconcile"),
@@ -141,6 +170,7 @@ def prg_jobs_latest(
         raise HTTPException(status_code=404, detail="Brak jobów tego typu.")
     return _job_to_out(j)
 
+
 @router.get("/jobs/active", response_model=PrgJobWithLogsOut | None)
 def prg_jobs_active(
     logs_limit: int = Query(default=30, ge=0, le=500),
@@ -148,14 +178,21 @@ def prg_jobs_active(
     _me: StaffUser = Depends(require(Action.PRG_IMPORT_RUN)),
 ):
     """
-    Zwraca najnowszy aktywny job PRG (status='running')
+    Zwraca najnowszy aktywny job PRG:
+      - status='running'
+      - albo status='cancelled' i finished_at IS NULL (czyli "cancelling" w toku)
     wraz z ostatnimi logami. Jeśli brak aktywnego joba → null.
     """
 
     j = (
         db.execute(
             select(PrgJob)
-            .where(PrgJob.status == "running")
+            .where(
+                or_(
+                    PrgJob.status == "running",
+                    and_(PrgJob.status == "cancelled", PrgJob.finished_at.is_(None)),
+                )
+            )
             .order_by(PrgJob.updated_at.desc())
             .limit(1)
         )
@@ -328,6 +365,7 @@ def prg_reconcile_run(
     me: StaffUser = Depends(require(Action.PRG_RECONCILE_RUN)),
 ):
     try:
+        PrgService(db).assert_no_active_job()
         stats = PrgReconcileService(db).run(actor_staff_id=int(me.id), job=False)
         db.commit()
         return PrgReconcileRunOut(

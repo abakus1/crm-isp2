@@ -31,7 +31,7 @@ from .prg_common import (
     display_local_no,
     stable_bigint_id,
 )
-from .prg_errors import PrgError
+from .prg_errors import PrgError, PrgCancelled
 from .prg_stream import iter_rows_from_file_path
 
 
@@ -110,10 +110,37 @@ def run_import(svc: Any, job: PrgJob, *, mode: str) -> None:
         )
         svc._job_log(job.id, f"START import (stream) kind={'ADRUNI' if is_adruni else 'ADDRESS_POINTS'} mode={mode}")
 
-        if is_adruni:
-            inserted, updated, skipped, rows_seen = upsert_adruni_building_numbers_with_progress(svc, job=job, rows=rows_iter2, mode=mode)
-        else:
-            inserted, updated, skipped, rows_seen = upsert_official_points_with_progress(svc, job=job, rows=rows_iter2, mode=mode)
+        try:
+            if is_adruni:
+                inserted, updated, skipped, rows_seen = upsert_adruni_building_numbers_with_progress(
+                    svc, job=job, rows=rows_iter2, mode=mode
+                )
+            else:
+                inserted, updated, skipped, rows_seen = upsert_official_points_with_progress(
+                    svc, job=job, rows=rows_iter2, mode=mode
+                )
+        except PrgCancelled:
+            # Import przerwany: zostawiamy już wprowadzone zmiany w DB,
+            # oznaczamy job + imp jako cancelled i kończymy "czysto".
+            try:
+                svc._job_log(job.id, "CANCEL: przerwano import — kończę bez rollback (dotychczasowe zmiany zostają)", level="warn")
+            except Exception:
+                pass
+
+            imp.status = "cancelled"
+            svc.db.add(imp)
+            svc.db.flush()
+            svc.db.commit()
+
+            svc._job_update(
+                job,
+                status="cancelled",
+                stage="done",
+                finished=True,
+                message="⛔️ Import PRG przerwany.",
+                meta_patch={"checksum": checksum, "cancelled": True},
+            )
+            return
 
         imp.status = "done"
         imp.rows_inserted = inserted
@@ -281,6 +308,11 @@ def upsert_adruni_building_numbers_with_progress(
         batch = []
 
     for row in rows:
+        # CANCEL check co N rekordów (status zmienia endpoint w innej sesji)
+        if rows_seen % 2000 == 0 and svc.is_job_cancelled(job.id):
+            flush_logs_if_needed(force=True)
+            raise PrgCancelled("Import ADRUNI cancelled")
+
         rows_seen += 1
 
         teryt = get_any(row, TERYT_KEYS)
@@ -399,6 +431,11 @@ def upsert_adruni_building_numbers_with_progress(
                     "skipped_reasons": dict(skip_reasons),
                 },
             )
+
+    # cancel check przed finalnym flush_batch (żeby nie robić "dodatkowych" commitów po cancel)
+    if svc.is_job_cancelled(job.id):
+        flush_logs_if_needed(force=True)
+        raise PrgCancelled("Import ADRUNI cancelled (pre-final flush)")
 
     flush_batch()
     flush_logs_if_needed(force=True)
@@ -559,6 +596,11 @@ def upsert_official_points_with_progress(
     chunk_keys: list[str] = []
 
     for row in rows:
+        # CANCEL check co N rekordów
+        if rows_seen % 2000 == 0 and svc.is_job_cancelled(job.id):
+            flush_logs_if_needed(force=True)
+            raise PrgCancelled("Import points cancelled")
+
         rows_seen += 1
 
         prg_point_id = get_any(row, ID_KEYS)
@@ -599,10 +641,10 @@ def upsert_official_points_with_progress(
         local_no = display_local_no(str(local_no_raw)) if local_no_raw else None
         local_no_norm = normalize_local_no(str(local_no_raw)) if local_no_raw else None
 
-        lat = get_any(row, ["lat", "latitude"])
-        lon = get_any(row, ["lon", "lng", "longitude"])
-        x92 = get_any(row, ["x", "x_1992", "x_puwg1992", "wsp_x", "x1992"])
-        y92 = get_any(row, ["y", "y_1992", "y_puwg1992", "wsp_y", "y1992"])
+        lat = get_any(row, LAT_KEYS)
+        lon = get_any(row, LON_KEYS)
+        x92 = get_any(row, X92_KEYS)
+        y92 = get_any(row, Y92_KEYS)
 
         x_1992 = y_1992 = None
         if x92 is not None and y92 is not None:
@@ -694,6 +736,11 @@ def upsert_official_points_with_progress(
 
     if chunk_keys:
         refresh_exists_cache(chunk_keys)
+
+    # cancel check przed finalnymi operacjami
+    if svc.is_job_cancelled(job.id):
+        flush_logs_if_needed(force=True)
+        raise PrgCancelled("Import points cancelled (pre-final flush)")
 
     flush_batch()
     flush_logs_if_needed(force=True)

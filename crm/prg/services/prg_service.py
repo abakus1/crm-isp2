@@ -8,7 +8,7 @@ import os
 import fcntl
 import hashlib
 
-from sqlalchemy import select, text
+from sqlalchemy import select, text, and_, or_
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.orm import Session
 
@@ -106,12 +106,67 @@ class PrgService:
         # commit, żeby UI (polling) widziało progres bez czekania na koniec joba
         self.db.commit()
 
-    def start_fetch_job(self, *, actor_staff_id: Optional[int]) -> PrgJob:
-        running = self.db.execute(
-            select(PrgJob).where(PrgJob.job_type == "fetch", PrgJob.status == "running").limit(1)
+    def assert_no_active_job(self) -> None:
+        """Twarda blokada: PRG ma być singletonem — 1 job na raz (fetch/import/cancelling).
+
+        Aktywny = status='running' lub (status='cancelled' i finished_at IS NULL).
+        """
+        active = self.db.execute(
+            select(PrgJob)
+            .where(
+                or_(
+                    PrgJob.status == "running",
+                    and_(PrgJob.status == "cancelled", PrgJob.finished_at.is_(None)),
+                )
+            )
+            .order_by(PrgJob.updated_at.desc())
+            .limit(1)
         ).scalar_one_or_none()
-        if running:
-            raise PrgError("Pobieranie PRG już trwa (job running).")
+        if active:
+            raise PrgError("Trwa inne zadanie PRG. Najpierw poczekaj albo użyj 'Przerwij'.")
+
+    def is_job_cancelled(self, job_id: uuid.UUID) -> bool:
+        """Sprawdza w DB, czy job został oznaczony jako cancelled (przez inną sesję / endpoint)."""
+        status = self.db.execute(select(PrgJob.status).where(PrgJob.id == job_id)).scalar_one_or_none()
+        return status == "cancelled"
+
+    def cancel_active_job(self, *, actor_staff_id: Optional[int]) -> PrgJob:
+        """Ustawia status='cancelled' dla aktywnego joba. Runner musi to respektować."""
+        j = (
+            self.db.execute(
+                select(PrgJob)
+                .where(
+                    or_(
+                        PrgJob.status == "running",
+                        and_(PrgJob.status == "cancelled", PrgJob.finished_at.is_(None)),
+                    )
+                )
+                .order_by(PrgJob.updated_at.desc())
+                .limit(1)
+            )
+            .scalars()
+            .first()
+        )
+        if not j:
+            raise PrgError("Brak aktywnego joba do przerwania.")
+
+        # już anulowany i trwa sprzątanie
+        if j.status == "cancelled" and j.finished_at is None:
+            return j
+
+        self._job_update(
+            j,
+            status="cancelled",
+            stage="cancelling",
+            message="⛔️ Zlecono przerwanie joba — zatrzymuję…",
+            meta_patch={"cancelled_by_staff_id": actor_staff_id},
+        )
+        self._job_log(j.id, f"CANCEL requested by staff_id={actor_staff_id}", level="warn")
+        return j
+
+    def start_fetch_job(self, *, actor_staff_id: Optional[int]) -> PrgJob:
+        # Twarda blokada: nie pozwalamy uruchomić żadnego joba, jeśli inny jest aktywny.
+        self.assert_no_active_job()
 
         job = PrgJob(
             job_type="fetch",
@@ -129,11 +184,8 @@ class PrgService:
         if mode not in ("full", "delta"):
             raise PrgError("Nieprawidłowy tryb importu. Dozwolone: full|delta")
 
-        running = self.db.execute(
-            select(PrgJob).where(PrgJob.job_type == "import", PrgJob.status == "running").limit(1)
-        ).scalar_one_or_none()
-        if running:
-            raise PrgError("Import PRG już trwa (job running).")
+        # Twarda blokada: nie pozwalamy uruchomić żadnego joba, jeśli inny jest aktywny.
+        self.assert_no_active_job()
 
         job = PrgJob(
             job_type="import",

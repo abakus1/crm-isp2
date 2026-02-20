@@ -10,6 +10,7 @@ from urllib.request import Request, urlopen
 from sqlalchemy import select
 
 from crm.db.models.prg import PrgImportFile, PrgJob
+from .prg_errors import PrgCancelled
 from .prg_common import now_utc
 
 
@@ -53,6 +54,10 @@ def run_fetch(svc: Any, job: PrgJob) -> None:
                         break
                     f.write(chunk)
                     bytes_dl += len(chunk)
+
+                    # cancel support (sprawdzamy w DB, bo cancel przychodzi z innej sesji)
+                    if svc.is_job_cancelled(job.id):
+                        raise PrgCancelled("Fetch cancelled")
 
                     now = now_utc()
                     if (now - last_tick).total_seconds() >= 0.5:
@@ -151,5 +156,37 @@ def run_fetch(svc: Any, job: PrgJob) -> None:
             tmp_dir.rmdir()
         except Exception:
             pass
+    except PrgCancelled:
+        # przerwane pobieranie: sprzątamy pliki tymczasowe i oznaczamy job jako cancelled
+        try:
+            svc._job_log(job.id, "CANCEL: przerwano pobieranie — sprzątam pliki tymczasowe", level="warn")
+        except Exception:
+            pass
+        try:
+            # usuwamy fragment pobranego pliku + katalog tmp
+            if 'tmp_zip' in locals():
+                try:
+                    tmp_zip.unlink(missing_ok=True)
+                except Exception:
+                    pass
+            if 'tmp_dir' in locals():
+                try:
+                    for p in tmp_dir.iterdir():
+                        p.unlink(missing_ok=True)
+                    tmp_dir.rmdir()
+                except Exception:
+                    pass
+        finally:
+            # lock i tak będzie zdjęty w finally
+            pass
+
+        svc._job_update(
+            job,
+            status="cancelled",
+            stage="done",
+            finished=True,
+            message="⛔️ Pobieranie PRG przerwane.",
+            meta_patch={"cancelled": True},
+        )
     finally:
         svc._release_lockfile(fp_lock, lock_path)
