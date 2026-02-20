@@ -12,6 +12,11 @@ type StaffUser = {
   email?: string | null;
   role: string;
   status: string;
+
+  // nowe pola (opcjonalne)
+  first_name?: string | null;
+  last_name?: string | null;
+  phone_company?: string | null;
 };
 
 type WhoAmI = {
@@ -85,7 +90,6 @@ export default function StaffPage() {
         });
         setRows(data);
       } else {
-        // ✅ staff zawsze widzi siebie
         const one = await apiFetch<StaffUser>("/staff/self", {
           method: "GET",
           token,
@@ -115,11 +119,7 @@ export default function StaffPage() {
     return rows.filter((u) => u.role === "admin" && u.status === "active").length;
   }, [rows]);
 
-  const visibleRows = useMemo(() => {
-    // po tej zmianie: staff dostaje już tylko siebie z backendu, więc nie trzeba filtrować
-    return rows;
-  }, [rows]);
-
+  const visibleRows = useMemo(() => rows, [rows]);
   const hasRows = visibleRows.length > 0;
 
   return (
@@ -138,9 +138,7 @@ export default function StaffPage() {
         </div>
       )}
 
-      {error && (
-        <div className="rounded-md bg-destructive/10 p-3 text-xs">{error}</div>
-      )}
+      {error && <div className="rounded-md bg-destructive/10 p-3 text-xs">{error}</div>}
 
       <div className="rounded-xl border border-border bg-card">
         <div className="flex items-center justify-between p-4 border-b border-border">
@@ -170,33 +168,44 @@ export default function StaffPage() {
           <table className="w-full text-sm">
             <thead className="text-xs text-muted-foreground">
               <tr className="border-b border-border">
-                <th className="text-left p-3">ID</th>
-                <th className="text-left p-3">Username</th>
+                <th className="text-left p-3">Nazwisko</th>
+                <th className="text-left p-3">Imię</th>
+                <th className="text-left p-3">Login</th>
                 <th className="text-left p-3">Email</th>
-                <th className="text-left p-3">Role</th>
+                <th className="text-left p-3">Telefon firmowy</th>
                 <th className="text-left p-3">Status</th>
+                <th className="text-left p-3">Szczegóły</th>
               </tr>
             </thead>
 
             <tbody>
               {visibleRows.map((u) => (
                 <tr key={u.id} className="border-b border-border last:border-b-0">
-                  <td className="p-3 text-xs">{u.id}</td>
+                  <td className="p-3">{u.last_name || "-"}</td>
+                  <td className="p-3">{u.first_name || "-"}</td>
                   <td className="p-3">{u.username}</td>
                   <td className="p-3 text-xs">{u.email || "-"}</td>
-                  <td className="p-3 text-xs">{u.role}</td>
+                  <td className="p-3 text-xs">{u.phone_company || "-"}</td>
                   <td className="p-3 text-xs">
                     <Badge status={u.status} />
                     {me?.staff_id === u.id && (
                       <span className="ml-2 text-[11px] text-muted-foreground">(to Ty)</span>
                     )}
                   </td>
+                  <td className="p-3 text-xs">
+                    <Link
+                      href={`/staff/${u.id}`}
+                      className="rounded-md border border-border px-2 py-1 hover:bg-muted/60"
+                    >
+                      Szczegóły
+                    </Link>
+                  </td>
                 </tr>
               ))}
 
               {!busy && !hasRows && (
                 <tr>
-                  <td colSpan={5} className="p-6 text-xs text-muted-foreground">
+                  <td colSpan={7} className="p-6 text-xs text-muted-foreground">
                     Pusto. To nie powinno się zdarzyć — sprawdź /staff/self.
                   </td>
                 </tr>

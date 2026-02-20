@@ -1,7 +1,7 @@
 # crm/db/models/staff.py
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, date
 from typing import Optional, Dict, Any, List
 
 import sqlalchemy as sa
@@ -64,6 +64,28 @@ class StaffUser(Base):
 
     username: Mapped[str] = mapped_column(sa.String(64), nullable=False, unique=True)
     email: Mapped[Optional[str]] = mapped_column(sa.String(255), nullable=True)
+
+    # -------------------------
+    # PROFILE (dane pracownika) - nowe, opcjonalne
+    # -------------------------
+    first_name: Mapped[Optional[str]] = mapped_column(sa.String(80), nullable=True)
+    last_name: Mapped[Optional[str]] = mapped_column(sa.String(120), nullable=True)
+    phone_company: Mapped[Optional[str]] = mapped_column(sa.String(32), nullable=True)
+
+    job_title: Mapped[Optional[str]] = mapped_column(sa.String(120), nullable=True)
+
+    birth_date: Mapped[Optional[date]] = mapped_column(sa.Date, nullable=True)
+    pesel: Mapped[Optional[str]] = mapped_column(sa.String(11), nullable=True)
+    id_document_no: Mapped[Optional[str]] = mapped_column(sa.String(32), nullable=True)
+
+    # Na dziś tekstowo; później podepniemy pod PRG
+    address_registered: Mapped[Optional[str]] = mapped_column(sa.Text, nullable=True)
+    address_current: Mapped[Optional[str]] = mapped_column(sa.Text, nullable=True)
+    address_current_same_as_registered: Mapped[bool] = mapped_column(
+        sa.Boolean,
+        nullable=False,
+        server_default=sa.text("true"),
+    )
 
     # ✅ rola jako string (RBAC w DB)
     role: Mapped[str] = mapped_column(
@@ -198,7 +220,7 @@ class StaffUserMfa(Base):
         server_default="totp",
     )
 
-    # aktywny secret (ten używany do logowania)
+    # aktywny secret (ten używany do logowania) — NOT NULL (jak w migracji)
     secret: Mapped[str] = mapped_column(sa.Text, nullable=False)
 
     enabled: Mapped[bool] = mapped_column(
@@ -288,41 +310,21 @@ class AuditLog(Base):
 
     action: Mapped[str] = mapped_column(sa.String(120), nullable=False)
 
-    entity_type: Mapped[Optional[str]] = mapped_column(
-        sa.String(80),
-        nullable=True,
-    )
+    entity_type: Mapped[Optional[str]] = mapped_column(sa.String(80), nullable=True)
+    entity_id: Mapped[Optional[str]] = mapped_column(sa.String(80), nullable=True)
 
-    entity_id: Mapped[Optional[str]] = mapped_column(
-        sa.String(80),
-        nullable=True,
-    )
-
-    request_id: Mapped[Optional[str]] = mapped_column(
-        sa.String(80),
-        nullable=True,
-    )
-
-    ip: Mapped[Optional[str]] = mapped_column(
-        postgresql.INET,
-        nullable=True,
-    )
-
-    user_agent: Mapped[Optional[str]] = mapped_column(
-        sa.Text,
-        nullable=True,
-    )
+    request_id: Mapped[Optional[str]] = mapped_column(sa.String(80), nullable=True)
+    ip: Mapped[Optional[str]] = mapped_column(postgresql.INET, nullable=True)
+    user_agent: Mapped[Optional[str]] = mapped_column(sa.Text, nullable=True)
 
     before: Mapped[Optional[Dict[str, Any]]] = mapped_column(
         postgresql.JSONB(astext_type=sa.Text),
         nullable=True,
     )
-
     after: Mapped[Optional[Dict[str, Any]]] = mapped_column(
         postgresql.JSONB(astext_type=sa.Text),
         nullable=True,
     )
-
     meta: Mapped[Optional[Dict[str, Any]]] = mapped_column(
         postgresql.JSONB(astext_type=sa.Text),
         nullable=True,
@@ -349,21 +351,11 @@ class ActivityLog(Base):
 
     action: Mapped[str] = mapped_column(sa.String(120), nullable=False)
 
-    entity_type: Mapped[Optional[str]] = mapped_column(
-        sa.String(80),
-        nullable=True,
-    )
+    # zgodnie z migracją: entity_* (a nie target_*)
+    entity_type: Mapped[Optional[str]] = mapped_column(sa.String(80), nullable=True)
+    entity_id: Mapped[Optional[str]] = mapped_column(sa.String(80), nullable=True)
 
-    entity_id: Mapped[Optional[str]] = mapped_column(
-        sa.String(80),
-        nullable=True,
-    )
-
-    message: Mapped[Optional[str]] = mapped_column(
-        sa.Text,
-        nullable=True,
-    )
-
+    message: Mapped[Optional[str]] = mapped_column(sa.Text, nullable=True)
     meta: Mapped[Optional[Dict[str, Any]]] = mapped_column(
         postgresql.JSONB(astext_type=sa.Text),
         nullable=True,

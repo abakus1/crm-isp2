@@ -42,9 +42,12 @@ router = APIRouter(prefix="/staff", tags=["staff"])
 
 
 class StaffCreateIn(BaseModel):
+    # Docelowo: imię/nazwisko/login/email_prywatny/telefon_firmowy
+    first_name: str = Field(..., min_length=1, max_length=80)
+    last_name: str = Field(..., min_length=1, max_length=120)
     username: str = Field(..., min_length=3, max_length=64)
     email: EmailStr
-    role: str = Field(..., min_length=2, max_length=64)
+    phone_company: Optional[str] = Field(default=None, max_length=32)
 
 
 class StaffArchiveIn(BaseModel):
@@ -60,8 +63,21 @@ class StaffOut(BaseModel):
     must_change_credentials: bool
     mfa_required: bool
 
+    # profile (opcjonalne)
+    first_name: Optional[str] = None
+    last_name: Optional[str] = None
+    phone_company: Optional[str] = None
+    job_title: Optional[str] = None
+    birth_date: Optional[str] = None
+    pesel: Optional[str] = None
+    id_document_no: Optional[str] = None
+    address_registered: Optional[str] = None
+    address_current: Optional[str] = None
+    address_current_same_as_registered: Optional[bool] = None
+
     @classmethod
     def from_model(cls, u: StaffUser) -> "StaffOut":
+        bd = getattr(u, "birth_date", None)
         return cls(
             id=int(u.id),
             username=u.username,
@@ -70,6 +86,17 @@ class StaffOut(BaseModel):
             status=str(u.status),
             must_change_credentials=bool(u.must_change_credentials),
             mfa_required=bool(u.mfa_required),
+
+            first_name=getattr(u, "first_name", None),
+            last_name=getattr(u, "last_name", None),
+            phone_company=getattr(u, "phone_company", None),
+            job_title=getattr(u, "job_title", None),
+            birth_date=bd.isoformat() if bd else None,
+            pesel=getattr(u, "pesel", None),
+            id_document_no=getattr(u, "id_document_no", None),
+            address_registered=getattr(u, "address_registered", None),
+            address_current=getattr(u, "address_current", None),
+            address_current_same_as_registered=getattr(u, "address_current_same_as_registered", None),
         )
 
 
@@ -83,7 +110,6 @@ class StaffPermissionOut(BaseModel):
 
 
 class StaffPermissionsUpdateIn(BaseModel):
-    # { action_code: "allow" | "deny" | null }
     overrides: dict = Field(default_factory=dict)
 
 
@@ -94,7 +120,6 @@ def _get_staff_or_404(db: Session, staff_id: int) -> StaffUser:
     return u
 
 
-# ✅ NOWE: staff widzi zawsze siebie
 @router.get(
     "/self",
     response_model=StaffOut,
@@ -105,9 +130,22 @@ def staff_self(
     db: Session = Depends(get_db),
     _me: StaffUser = Depends(get_current_user),
 ):
-    # _me już jest z DB, ale trzymajmy schemat
     me = db.get(StaffUser, int(_me.id)) or _me
     return StaffOut.from_model(me)
+
+
+@router.get(
+    "/{staff_id}",
+    response_model=StaffOut,
+    dependencies=[Depends(require(Action.STAFF_READ))],
+)
+def staff_get_one(
+    staff_id: int,
+    db: Session = Depends(get_db),
+    _me: StaffUser = Depends(get_current_user),
+):
+    u = _get_staff_or_404(db, staff_id)
+    return StaffOut.from_model(u)
 
 
 @router.get(
@@ -190,9 +228,11 @@ def admin_create_staff(
         u = create_staff_user(
             db,
             actor=_me,
+            first_name=payload.first_name,
+            last_name=payload.last_name,
             username=payload.username,
             email=str(payload.email),
-            role=payload.role,
+            phone_company=payload.phone_company,
         )
         return StaffOut.from_model(u)
     except StaffAdminError as e:

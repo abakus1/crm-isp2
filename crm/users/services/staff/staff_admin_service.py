@@ -1,4 +1,4 @@
-# crm/services/staff/staff_admin_service.py
+# crm/users/services/staff/staff_admin_service.py
 from __future__ import annotations
 
 import secrets
@@ -6,19 +6,16 @@ import string
 from datetime import datetime, timezone
 from typing import Optional
 
-from sqlalchemy.orm import Session
-from sqlalchemy.exc import IntegrityError
 import sqlalchemy as sa
+from sqlalchemy.exc import IntegrityError
+from sqlalchemy.orm import Session
 
-from crm.shared.request_context import get_request_context
 from crm.app.config import get_settings
-from crm.adapters.mail.smtp_mailer import get_mailer, MailerError
-from crm.db.models.staff import StaffUser, StaffUserMfa, AuditLog, ActivityLog
-from crm.users.services.rbac.permission_service import role_exists
-
-# Reuse the same password hashing scheme as identity/auth_service.py
-# (you already have CryptContext there; this keeps logic outside ORM models)
+from crm.adapters.mail.smtp_mailer import MailerError, get_mailer
+from crm.db.models.staff import ActivityLog, AuditLog, StaffUser, StaffUserMfa
+from crm.shared.request_context import get_request_context
 from crm.users.identity.auth_service import _pwd  # noqa: WPS450
+from crm.users.services.rbac.permission_service import role_exists
 
 
 class StaffAdminError(RuntimeError):
@@ -32,11 +29,6 @@ def _now() -> datetime:
 def _generate_temp_password(length: int = 14) -> str:
     alphabet = string.ascii_letters + string.digits + "!@#$%^&*"
     return "".join(secrets.choice(alphabet) for _ in range(length))
-
-
-def _set_password(user: StaffUser, raw_password: str) -> None:
-    # Avoid relying on ORM having set_password(); we hash consistently with identity layer.
-    user.password_hash = _pwd.hash(raw_password)
 
 
 def _audit(
@@ -75,8 +67,8 @@ def _activity(
     staff_user_id: int,
     action: str,
     message: str,
-    target_type: Optional[str] = None,
-    target_id: Optional[str] = None,
+    entity_type: Optional[str] = None,
+    entity_id: Optional[str] = None,
     meta: Optional[dict] = None,
 ) -> None:
     db.add(
@@ -84,27 +76,118 @@ def _activity(
             staff_user_id=staff_user_id,
             action=action,
             message=message,
-            target_type=target_type,
-            target_id=target_id,
+            entity_type=entity_type,
+            entity_id=entity_id,
             meta=meta,
         )
     )
+
+
+def _send_invite_best_effort(
+    db: Session,
+    *,
+    actor_staff_id: int,
+    target_staff_id: int,
+    to_email: str,
+    username: str,
+    temp_password: str,
+) -> None:
+    settings = get_settings()
+    mailer = get_mailer(settings)
+    if mailer is None:
+        return
+
+    try:
+        mailer.send_staff_invite(
+            to_email=to_email,
+            username=username,
+            temp_password=temp_password,
+        )
+    except (MailerError, Exception) as e:
+        _audit(
+            db=db,
+            staff_user_id=actor_staff_id,
+            severity="warning",
+            action="STAFF_INVITE_EMAIL_FAILED",
+            entity_type="staff_users",
+            entity_id=str(target_staff_id),
+            meta={"error": str(e), "to": to_email},
+        )
+
+
+def _send_reset_password_best_effort(
+    db: Session,
+    *,
+    actor_staff_id: int,
+    target_staff_id: int,
+    to_email: str,
+    username: str,
+    temp_password: str,
+) -> None:
+    settings = get_settings()
+    mailer = get_mailer(settings)
+    if mailer is None:
+        return
+
+    try:
+        mailer.send_staff_reset_password(
+            to_email=to_email,
+            username=username,
+            temp_password=temp_password,
+        )
+    except (MailerError, Exception) as e:
+        _audit(
+            db=db,
+            staff_user_id=actor_staff_id,
+            severity="warning",
+            action="STAFF_PASSWORD_RESET_EMAIL_FAILED",
+            entity_type="staff_users",
+            entity_id=str(target_staff_id),
+            meta={"error": str(e), "to": to_email},
+        )
+
+
+def _send_reset_totp_best_effort(
+    db: Session,
+    *,
+    actor_staff_id: int,
+    target_staff_id: int,
+    to_email: str,
+    username: str,
+) -> None:
+    settings = get_settings()
+    mailer = get_mailer(settings)
+    if mailer is None:
+        return
+
+    try:
+        mailer.send_staff_reset_totp(
+            to_email=to_email,
+            username=username,
+        )
+    except (MailerError, Exception) as e:
+        _audit(
+            db=db,
+            staff_user_id=actor_staff_id,
+            severity="warning",
+            action="STAFF_TOTP_RESET_EMAIL_FAILED",
+            entity_type="staff_users",
+            entity_id=str(target_staff_id),
+            meta={"error": str(e), "to": to_email},
+        )
 
 
 def create_staff_user(
     db: Session,
     *,
     actor: StaffUser,
+    first_name: str,
+    last_name: str,
     username: str,
     email: Optional[str],
-    role: str,
-    created_by_staff_id: int | None = None,
-    request_id: Optional[str] = None,
-    actor_ip: Optional[str] = None,
-    user_agent: Optional[str] = None,
+    phone_company: Optional[str] = None,
 ) -> StaffUser:
-    existing = db.query(StaffUser).filter(StaffUser.username == username).first()
-    if existing:
+    if db.query(StaffUser).filter(StaffUser.username == username).first():
         raise StaffAdminError("Username already exists")
 
     if not email:
@@ -114,7 +197,6 @@ def create_staff_user(
     if "@" not in email_norm:
         raise StaffAdminError("Invalid email")
 
-    # Unikalność email w całym staff_users (admin+staff razem)
     email_exists = (
         db.query(StaffUser)
         .filter(StaffUser.email.isnot(None))
@@ -124,99 +206,69 @@ def create_staff_user(
     if email_exists:
         raise StaffAdminError("Email already exists")
 
-    # Rola/stanowisko musi istnieć w RBAC (DB)
+    role = "unassigned"
     if not role_exists(db, role_code=role):
-        raise StaffAdminError("Nieznane stanowisko/rola")
+        raise StaffAdminError("Brak roli startowej 'unassigned' w RBAC")
 
     temp_password = _generate_temp_password()
     now = _now()
 
-    creator_id = int(created_by_staff_id) if created_by_staff_id is not None else int(actor.id)
-
-    user = StaffUser(
+    u = StaffUser(
+        first_name=(first_name or "").strip() or None,
+        last_name=(last_name or "").strip() or None,
         username=username,
         email=email_norm,
+        phone_company=(phone_company or "").strip() or None,
         role=role,
         status="active",
         must_change_credentials=True,
         mfa_required=True,
         token_version=1,
+        password_hash=_pwd.hash(temp_password),
         password_changed_at=now,
         created_at=now,
         updated_at=now,
     )
-    _set_password(user, temp_password)
 
-    db.add(user)
-    db.flush()  # mamy user.id bez commita
+    db.add(u)
+    db.flush()
 
-    # audit + activity w TEJ SAMEJ transakcji
     _audit(
         db=db,
         staff_user_id=int(actor.id),
         severity="info",
         action="STAFF_CREATE",
         entity_type="staff_users",
-        entity_id=str(user.id),
-        before=None,
+        entity_id=str(u.id),
         after={
-            "id": int(user.id),
-            "username": user.username,
-            "email": user.email,
-            "role": str(user.role),
-            "status": str(user.status),
-        },
-        meta={
-            "created_by_staff_id": creator_id,
-            "request_id": request_id,
-            "actor_ip": actor_ip,
-            "user_agent": user_agent,
+            "id": int(u.id),
+            "first_name": u.first_name,
+            "last_name": u.last_name,
+            "username": u.username,
+            "email": u.email,
+            "phone_company": u.phone_company,
+            "role": str(u.role),
+            "status": str(u.status),
         },
     )
     _activity(
         db=db,
         staff_user_id=int(actor.id),
         action="STAFF_CREATE",
-        message=f"Utworzono pracownika {user.username}",
-        target_type="staff_users",
-        target_id=str(user.id),
-        meta={"username": user.username, "role": str(user.role)},
+        message=f"Utworzono pracownika {u.username}",
+        entity_type="staff_users",
+        entity_id=str(u.id),
     )
 
-    # seed MFA record (totp)
-    db.add(
-        StaffUserMfa(
-            staff_user_id=int(user.id),
-            method="totp",
-            enabled=False,
-            secret=None,
-            pending_secret=None,
-            pending_created_at=None,
-            created_at=now,
-        )
+    # ✅ Przywracamy to co działało: mail z hasłem tymczasowym (invite)
+    _send_invite_best_effort(
+        db,
+        actor_staff_id=int(actor.id),
+        target_staff_id=int(u.id),
+        to_email=email_norm,
+        username=username,
+        temp_password=temp_password,
     )
-
-    # mail
-    settings = get_settings()
-    if settings.mail_send_enabled:
-        try:
-            mailer = get_mailer()
-            mailer.send_staff_welcome_email(
-                to_email=email_norm,
-                username=username,
-                temp_password=temp_password,
-            )
-        except MailerError as e:
-            # nadal commitujemy usera, ale logujemy warning
-            _audit(
-                db=db,
-                staff_user_id=int(actor.id),
-                severity="warning",
-                action="STAFF_WELCOME_EMAIL_FAILED",
-                entity_type="staff_users",
-                entity_id=str(user.id),
-                meta={"error": str(e), "to": email_norm},
-            )
 
     try:
         db.commit()
@@ -224,7 +276,7 @@ def create_staff_user(
         db.rollback()
         raise StaffAdminError("Database constraint error") from e
 
-    return user
+    return u
 
 
 def reset_staff_password(db: Session, *, staff_user: StaffUser, reset_by_staff_id: int) -> None:
@@ -256,38 +308,25 @@ def reset_staff_password(db: Session, *, staff_user: StaffUser, reset_by_staff_i
         entity_id=str(staff_user.id),
         before=before,
         after=after,
-        meta={"target_username": staff_user.username},
     )
-
     _activity(
         db=db,
         staff_user_id=reset_by_staff_id,
         action="STAFF_RESET_PASSWORD",
         message=f"Zresetowano hasło pracownika {staff_user.username}",
-        target_type="staff_users",
-        target_id=str(staff_user.id),
-        meta={"target_username": staff_user.username},
+        entity_type="staff_users",
+        entity_id=str(staff_user.id),
     )
 
-    settings = get_settings()
-    if settings.mail_send_enabled and staff_user.email:
-        try:
-            mailer = get_mailer()
-            mailer.send_staff_password_reset_email(
-                to_email=staff_user.email,
-                username=staff_user.username,
-                temp_password=temp_password,
-            )
-        except MailerError as e:
-            _audit(
-                db=db,
-                staff_user_id=reset_by_staff_id,
-                severity="warning",
-                action="STAFF_PASSWORD_RESET_EMAIL_FAILED",
-                entity_type="staff_users",
-                entity_id=str(staff_user.id),
-                meta={"error": str(e), "to": staff_user.email},
-            )
+    if staff_user.email:
+        _send_reset_password_best_effort(
+            db,
+            actor_staff_id=reset_by_staff_id,
+            target_staff_id=int(staff_user.id),
+            to_email=staff_user.email,
+            username=staff_user.username,
+            temp_password=temp_password,
+        )
 
     db.commit()
 
@@ -299,21 +338,23 @@ def reset_staff_totp(db: Session, *, staff_user: StaffUser, reset_by_staff_id: i
         db.query(StaffUserMfa)
         .filter(StaffUserMfa.staff_user_id == int(staff_user.id))
         .filter(StaffUserMfa.method == "totp")
+        .order_by(StaffUserMfa.id.desc())
         .first()
     )
-    if not mfa:
-        raise StaffAdminError("TOTP record not found for staff user")
 
-    before = {"enabled": bool(mfa.enabled)}
-    mfa.enabled = False
-    mfa.secret = None
-    mfa.pending_secret = None
-    mfa.pending_created_at = None
+    before = {"mfa_row_exists": bool(mfa), "enabled": bool(getattr(mfa, "enabled", False))}
+
+    if mfa:
+        # secret NOT NULL -> nie ruszamy secreta, tylko wyłączamy
+        mfa.enabled = False
+        mfa.pending_secret = None
+        mfa.pending_created_at = None
 
     staff_user.must_change_credentials = True
+    staff_user.token_version = int(staff_user.token_version) + 1
     staff_user.updated_at = now
 
-    after = {"enabled": bool(mfa.enabled)}
+    after = {"mfa_row_exists": bool(mfa), "enabled": bool(getattr(mfa, "enabled", False))}
 
     _audit(
         db=db,
@@ -324,17 +365,23 @@ def reset_staff_totp(db: Session, *, staff_user: StaffUser, reset_by_staff_id: i
         entity_id=str(staff_user.id),
         before=before,
         after=after,
-        meta={"target_username": staff_user.username},
     )
-
     _activity(
         db=db,
         staff_user_id=reset_by_staff_id,
         action="STAFF_RESET_TOTP",
         message=f"Zresetowano TOTP pracownika {staff_user.username}",
-        target_type="staff_users",
-        target_id=str(staff_user.id),
-        meta={"target_username": staff_user.username},
+        entity_type="staff_users",
+        entity_id=str(staff_user.id),
     )
+
+    if staff_user.email:
+        _send_reset_totp_best_effort(
+            db,
+            actor_staff_id=reset_by_staff_id,
+            target_staff_id=int(staff_user.id),
+            to_email=staff_user.email,
+            username=staff_user.username,
+        )
 
     db.commit()

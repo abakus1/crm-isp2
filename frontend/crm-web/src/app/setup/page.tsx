@@ -2,178 +2,250 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
+import { QRCodeCanvas } from "qrcode.react";
+
 import { apiFetch, ApiError } from "@/lib/api";
 import { useAuth } from "@/lib/auth";
-import QRCode from "qrcode.react";
 
 type SetupPasswordResp = { status: string; relogin_required: boolean };
 type TotpBeginResp = { totp_secret: string; totp_uri: string };
 type TotpConfirmResp = { status: string; relogin_required: boolean };
 
 export default function SetupPage() {
-  const { token, logout } = useAuth();
   const router = useRouter();
+  const { token, logout } = useAuth();
 
   const [step, setStep] = useState<"password" | "totp" | "done">("password");
+
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [ok, setOk] = useState<string | null>(null);
 
-  const [newPassword, setNewPassword] = useState("");
-  const [newPassword2, setNewPassword2] = useState("");
+  const [pw1, setPw1] = useState("");
+  const [pw2, setPw2] = useState("");
 
-  const [totp, setTotp] = useState<TotpBeginResp | null>(null);
   const [totpCode, setTotpCode] = useState("");
+  const [totpSecret, setTotpSecret] = useState<string | null>(null);
+  const [totpUri, setTotpUri] = useState<string | null>(null);
 
-  // Jeśli nie ma tokena -> login
-  useEffect(() => {
-    if (!token) router.replace("/login");
-  }, [token, router]);
+  function handleUnauthorized() {
+    logout();
+    router.replace("/login");
+  }
 
-  async function submitPassword() {
+  const pwMinOk = useMemo(() => pw1.trim().length >= 8, [pw1]);
+  const pwMatchOk = useMemo(() => pw1 === pw2, [pw1, pw2]);
+  const canSubmitPassword = useMemo(() => pwMinOk && pwMatchOk, [pwMinOk, pwMatchOk]);
+  const canSubmitTotp = useMemo(() => /^\d{6}$/.test(totpCode.trim()), [totpCode]);
+
+  async function beginTotp() {
     setError(null);
+    setOk(null);
+
+    const resp = await apiFetch<TotpBeginResp>("/identity/setup/totp/begin", {
+      method: "POST",
+      token,
+      onUnauthorized: handleUnauthorized,
+    });
+
+    setTotpSecret(resp.totp_secret);
+    setTotpUri(resp.totp_uri);
+  }
+
+  async function setupPassword() {
+    setError(null);
+    setOk(null);
     setBusy(true);
+
     try {
-      const out = await apiFetch<SetupPasswordResp>("/identity/setup/password", {
+      // ✅ zgodnie z backendem: new_password + new_password_repeat
+      const resp = await apiFetch<SetupPasswordResp>("/identity/setup/password", {
         method: "POST",
         token,
-        body: { new_password: newPassword, new_password_repeat: newPassword2 },
-        onUnauthorized: () => {
-          logout();
-          router.replace("/login");
+        onUnauthorized: handleUnauthorized,
+        body: {
+          new_password: pw1,
+          new_password_repeat: pw2,
         },
       });
 
-      // po zmianie hasła przechodzimy do TOTP (bez reloginu)
+      if (resp.relogin_required) {
+        setOk("Hasło ustawione. Zaloguj się ponownie.");
+        logout();
+        router.replace("/login");
+        return;
+      }
+
+      setOk("Hasło ustawione. Konfigurujemy TOTP…");
       setStep("totp");
-
-      // Start TOTP begin (backend generuje secret + URI)
-      const begin = await apiFetch<TotpBeginResp>("/identity/setup/totp/begin", {
-        method: "POST",
-        token,
-        body: {},
-        onUnauthorized: () => {
-          logout();
-          router.replace("/login");
-        },
-      });
-      setTotp(begin);
+      await beginTotp();
     } catch (e: any) {
       const err = e as ApiError;
-      setError(err.message || "Błąd setup password");
+      setError(err.message || "Nie udało się ustawić hasła");
     } finally {
       setBusy(false);
     }
   }
 
   async function confirmTotp() {
-    if (!totp) return;
     setError(null);
+    setOk(null);
     setBusy(true);
+
     try {
-      const out = await apiFetch<TotpConfirmResp>("/identity/setup/totp/confirm", {
+      if (!totpSecret) {
+        setError("Brak sekretu TOTP. Kliknij „Odśwież QR”.");
+        return;
+      }
+
+      // ✅ zgodnie z backendem: totp_code + totp_secret
+      const resp = await apiFetch<TotpConfirmResp>("/identity/setup/totp", {
         method: "POST",
         token,
-        body: { totp_secret: totp.totp_secret, totp_code: totpCode },
-        onUnauthorized: () => {
-          logout();
-          router.replace("/login");
+        onUnauthorized: handleUnauthorized,
+        body: {
+          totp_code: totpCode.trim(),
+          totp_secret: totpSecret,
         },
       });
 
-      // Backend mówi: relogin required -> robimy czyste wylogowanie
+      if (resp.relogin_required) {
+        setOk("TOTP skonfigurowane. Zaloguj się ponownie.");
+        logout();
+        router.replace("/login");
+        return;
+      }
+
+      setOk("TOTP skonfigurowane. Gotowe ✅");
       setStep("done");
-      logout();
-      router.replace("/login");
+      setTimeout(() => router.replace("/"), 600);
     } catch (e: any) {
       const err = e as ApiError;
-      setError(err.message || "Błąd confirm TOTP");
+      setError(err.message || "Niepoprawny kod TOTP");
     } finally {
       setBusy(false);
     }
   }
 
+  useEffect(() => {
+    if (!token) router.replace("/login");
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [token]);
+
   return (
-    <div className="min-h-[calc(100vh-80px)] flex items-center justify-center p-6">
-      <div className="w-full max-w-md rounded-xl border border-border bg-card p-6 space-y-4">
-        <div>
-          <div className="text-sm font-semibold">Pierwsze logowanie</div>
-          <div className="text-xs text-muted-foreground">
-            Ustaw nowe hasło i skonfiguruj TOTP. Bez tego nie wejdziesz do panelu.
+    <div className="mx-auto max-w-xl space-y-4">
+      <div className="rounded-xl border border-border bg-card p-5">
+        <div className="text-sm font-semibold">Pierwsze uruchomienie</div>
+        <div className="text-xs text-muted-foreground">
+          Ustaw hasło i skonfiguruj TOTP. Potem wchodzisz normalnie do panelu.
+        </div>
+      </div>
+
+      {error && <div className="rounded-md bg-destructive/10 p-3 text-xs">{error}</div>}
+      {ok && <div className="rounded-md bg-emerald-500/10 p-3 text-xs">{ok}</div>}
+
+      {step === "password" && (
+        <div className="rounded-xl border border-border bg-card p-5 space-y-3">
+          <div className="text-sm font-medium">Ustaw nowe hasło</div>
+
+          <div className="space-y-2">
+            <input
+              type="password"
+              value={pw1}
+              onChange={(e) => setPw1(e.target.value)}
+              placeholder="Nowe hasło (min. 8 znaków)"
+              className="w-full rounded-md border border-border bg-background px-3 py-2 text-sm"
+            />
+            <input
+              type="password"
+              value={pw2}
+              onChange={(e) => setPw2(e.target.value)}
+              placeholder="Powtórz nowe hasło"
+              className="w-full rounded-md border border-border bg-background px-3 py-2 text-sm"
+            />
+          </div>
+
+          {!pwMinOk && pw1.length > 0 && (
+            <div className="text-[11px] text-muted-foreground">Hasło jest za krótkie.</div>
+          )}
+          {pw1.length > 0 && pw2.length > 0 && !pwMatchOk && (
+            <div className="text-[11px] text-destructive">Hasła nie są identyczne.</div>
+          )}
+
+          <button
+            disabled={busy || !canSubmitPassword}
+            onClick={setupPassword}
+            className="rounded-md border border-border px-3 py-2 text-sm hover:bg-muted/60 disabled:opacity-60"
+          >
+            {busy ? "Zapisuję..." : "Zapisz hasło"}
+          </button>
+
+          <div className="text-[11px] text-muted-foreground">
+            Dwa pola = mniej literówek, mniej płaczu, więcej spokoju.
           </div>
         </div>
+      )}
 
-        {error && (
-          <div className="rounded-md bg-destructive/10 p-3 text-xs">
-            {error}
-          </div>
-        )}
-
-        {step === "password" && (
-          <div className="space-y-3">
-            <label className="block text-xs text-muted-foreground">Nowe hasło</label>
-            <input
-              type="password"
-              className="w-full rounded-md border border-border bg-background px-3 py-2 text-sm"
-              value={newPassword}
-              onChange={(e) => setNewPassword(e.target.value)}
-              placeholder="Minimum 8 znaków"
-            />
-
-            <label className="block text-xs text-muted-foreground">Powtórz nowe hasło</label>
-            <input
-              type="password"
-              className="w-full rounded-md border border-border bg-background px-3 py-2 text-sm"
-              value={newPassword2}
-              onChange={(e) => setNewPassword2(e.target.value)}
-              placeholder="Powtórz hasło"
-            />
-
-            <button
-              onClick={submitPassword}
-              disabled={busy || newPassword.length < 8 || newPassword2.length < 8}
-              className="w-full rounded-md border border-border px-3 py-2 text-sm hover:bg-muted/60 disabled:opacity-60"
-            >
-              {busy ? "Zapisuję..." : "Zapisz hasło"}
-            </button>
-          </div>
-        )}
-
-        {step === "totp" && (
-          <div className="space-y-3">
+      {step === "totp" && (
+        <div className="rounded-xl border border-border bg-card p-5 space-y-4">
+          <div>
+            <div className="text-sm font-medium">Konfiguracja TOTP</div>
             <div className="text-xs text-muted-foreground">
-              Zeskanuj QR w aplikacji (Google Authenticator / Authy / 1Password), potem wpisz kod.
+              Zeskanuj QR w Google Authenticator / Authy / 1Password.
             </div>
+          </div>
 
-            <div className="flex justify-center rounded-lg border border-border bg-background p-4">
-              {totp ? <QRCode value={totp.totp_uri} size={180} /> : <div className="text-xs">Ładuję QR...</div>}
+          {totpUri ? (
+            <div className="flex flex-col items-center gap-3">
+              <div className="rounded-lg border border-border bg-background p-3">
+                <QRCodeCanvas value={totpUri} size={220} />
+              </div>
+
+              {totpSecret && (
+                <div className="text-xs text-muted-foreground">
+                  Klucz ręczny: <span className="font-mono text-foreground">{totpSecret}</span>
+                </div>
+              )}
             </div>
+          ) : (
+            <div className="text-xs text-muted-foreground">
+              Brak QR. Kliknij „Odśwież QR”.
+            </div>
+          )}
 
-            <label className="block text-xs text-muted-foreground">Kod TOTP</label>
+          <div className="flex items-center gap-2">
             <input
-              type="text"
-              inputMode="numeric"
-              className="w-full rounded-md border border-border bg-background px-3 py-2 text-sm"
               value={totpCode}
               onChange={(e) => setTotpCode(e.target.value)}
-              placeholder="6 cyfr"
+              inputMode="numeric"
+              placeholder="Kod 6-cyfrowy"
+              className="flex-1 rounded-md border border-border bg-background px-3 py-2 text-sm"
             />
-
             <button
+              disabled={busy || !canSubmitTotp}
               onClick={confirmTotp}
-              disabled={busy || totpCode.length < 4}
-              className="w-full rounded-md border border-border px-3 py-2 text-sm hover:bg-muted/60 disabled:opacity-60"
+              className="rounded-md border border-border px-3 py-2 text-sm hover:bg-muted/60 disabled:opacity-60"
             >
-              {busy ? "Potwierdzam..." : "Potwierdź TOTP"}
+              {busy ? "Sprawdzam..." : "Zatwierdź"}
             </button>
           </div>
-        )}
 
-        {step === "done" && (
-          <div className="text-xs text-muted-foreground">
-            Setup zakończony. Zaloguj się ponownie nowym hasłem i TOTP.
-          </div>
-        )}
-      </div>
+          <button
+            disabled={busy}
+            onClick={beginTotp}
+            className="rounded-md border border-border px-3 py-2 text-sm hover:bg-muted/60 disabled:opacity-60"
+          >
+            Odśwież QR
+          </button>
+        </div>
+      )}
+
+      {step === "done" && (
+        <div className="rounded-xl border border-border bg-card p-5 space-y-2">
+          <div className="text-sm font-medium">Gotowe ✅</div>
+          <div className="text-xs text-muted-foreground">Przekierowuję na dashboard…</div>
+        </div>
+      )}
     </div>
   );
 }
