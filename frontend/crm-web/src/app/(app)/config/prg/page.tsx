@@ -1,3 +1,4 @@
+// frontend/crm-web/src/app/(app)/config/prg/page.tsx
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
@@ -14,6 +15,27 @@ type PrgState = {
   source_url?: string | null;
   checksum?: string | null;
   address_points_count?: number | null;
+  adruni_building_numbers_count?: number | null;
+};
+
+type PlaceSuggest = {
+  place_name: string;
+  terc: string;
+  simc: string;
+  buildings_count: number;
+};
+
+type StreetSuggest = {
+  street_name: string;
+  ulic: string;
+  buildings_count: number;
+};
+
+type BuildingRow = {
+  building_no: string;
+  terc: string;
+  simc: string;
+  ulic?: string | null;
 };
 
 type JobLog = {
@@ -77,6 +99,21 @@ export default function PrgConfigPage() {
   const [job, setJob] = useState<PrgJob | null>(null);
   const pollRef = useRef<number | null>(null);
 
+  // ADRUNI lookup UI
+  const [placeQ, setPlaceQ] = useState<string>("");
+  const [placeSug, setPlaceSug] = useState<PlaceSuggest[]>([]);
+  const [placeLoading, setPlaceLoading] = useState(false);
+  const [placePicked, setPlacePicked] = useState<PlaceSuggest | null>(null);
+
+  const [streetQ, setStreetQ] = useState<string>("");
+  const [streetSug, setStreetSug] = useState<StreetSuggest[]>([]);
+  const [streetLoading, setStreetLoading] = useState(false);
+  const [streetPicked, setStreetPicked] = useState<StreetSuggest | null>(null);
+
+  const [buildings, setBuildings] = useState<BuildingRow[]>([]);
+  const [buildingsLoading, setBuildingsLoading] = useState(false);
+  const [lookupErr, setLookupErr] = useState<string | null>(null);
+
   // KEEPALIVE (tylko na ekranie PRG i tylko gdy job running)
   const keepaliveRef = useRef<number | null>(null);
   const lastPingAtRef = useRef<number>(0);
@@ -94,6 +131,89 @@ export default function PrgConfigPage() {
     } catch (e: any) {
       const ae = e as ApiError;
       setErr(ae?.message || "Błąd");
+    }
+  }
+
+  async function lookupPlaces(q: string) {
+    if (!token) return;
+    const qq = q.trim();
+    if (qq.length < 2) {
+      setPlaceSug([]);
+      return;
+    }
+
+    setLookupErr(null);
+    setPlaceLoading(true);
+    try {
+      const res = await apiFetch<PlaceSuggest[]>(
+        `/prg/lookup/places?q=${encodeURIComponent(qq)}&limit=20`,
+        {
+          method: "GET",
+          token,
+          onUnauthorized: () => logout(),
+        }
+      );
+      setPlaceSug(res || []);
+    } catch (e: any) {
+      const ae = e as ApiError;
+      setLookupErr(ae?.message || "Błąd wyszukiwania miejscowości");
+    } finally {
+      setPlaceLoading(false);
+    }
+  }
+
+  async function lookupStreets(terc: string, simc: string, q: string) {
+    if (!token) return;
+    const qq = q.trim();
+    if (qq.length < 1) {
+      setStreetSug([]);
+      return;
+    }
+
+    setLookupErr(null);
+    setStreetLoading(true);
+    try {
+      const res = await apiFetch<StreetSuggest[]>(
+        `/prg/lookup/streets?terc=${encodeURIComponent(terc)}&simc=${encodeURIComponent(
+          simc
+        )}&q=${encodeURIComponent(qq)}&limit=50`,
+        {
+          method: "GET",
+          token,
+          onUnauthorized: () => logout(),
+        }
+      );
+      setStreetSug(res || []);
+    } catch (e: any) {
+      const ae = e as ApiError;
+      setLookupErr(ae?.message || "Błąd wyszukiwania ulic");
+    } finally {
+      setStreetLoading(false);
+    }
+  }
+
+  async function lookupBuildings(terc: string, simc: string, ulic: string) {
+    if (!token) return;
+    setLookupErr(null);
+    setBuildingsLoading(true);
+    try {
+      const res = await apiFetch<BuildingRow[]>(
+        `/prg/lookup/buildings?terc=${encodeURIComponent(terc)}&simc=${encodeURIComponent(
+          simc
+        )}&ulic=${encodeURIComponent(ulic)}&limit=2000`,
+        {
+          method: "GET",
+          token,
+          onUnauthorized: () => logout(),
+        }
+      );
+      setBuildings(res || []);
+    } catch (e: any) {
+      const ae = e as ApiError;
+      setLookupErr(ae?.message || "Błąd pobierania budynków");
+      setBuildings([]);
+    } finally {
+      setBuildingsLoading(false);
     }
   }
 
@@ -262,6 +382,40 @@ export default function PrgConfigPage() {
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [token, canAccess]);
+
+  // Debounce: miejscowość
+  useEffect(() => {
+    if (!token || !canAccess) return;
+    const t = window.setTimeout(() => {
+      // jeśli ktoś już wybrał miejscowość, a potem edytuje tekst — kasujemy wybór
+      if (placePicked && placePicked.place_name !== placeQ.trim()) {
+        setPlacePicked(null);
+        setStreetPicked(null);
+        setStreetQ("");
+        setStreetSug([]);
+        setBuildings([]);
+      }
+      lookupPlaces(placeQ);
+    }, 250);
+    return () => window.clearTimeout(t);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [placeQ, token, canAccess]);
+
+  // Debounce: ulica
+  useEffect(() => {
+    if (!token || !canAccess) return;
+    if (!placePicked) return;
+
+    const t = window.setTimeout(() => {
+      if (streetPicked && streetPicked.street_name !== streetQ.trim()) {
+        setStreetPicked(null);
+        setBuildings([]);
+      }
+      lookupStreets(placePicked.terc, placePicked.simc, streetQ);
+    }, 200);
+    return () => window.clearTimeout(t);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [streetQ, placePicked, token, canAccess]);
 
   const stats = useMemo(() => {
     if (!job) return null;
@@ -469,6 +623,179 @@ export default function PrgConfigPage() {
         >
           Przerwij
         </button>
+      </div>
+
+      {/* WYSZUKIWARKA LOKALIZACJI */}
+      <div className="rounded-xl border border-border bg-card p-4 space-y-3">
+        <div className="text-sm font-semibold">Wyszukiwarka lokalizacji (PRG)</div>
+        <div className="text-xs text-muted-foreground">
+          Flow: miejscowość → ulica → lista budynków (z kodami TERC/SIMC/ULIC). Działa na ADRUNI.
+        </div>
+
+        {lookupErr && (
+          <div className="rounded-md border border-red-200 bg-red-50 p-3 text-sm text-red-700">{lookupErr}</div>
+        )}
+
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+          <div className="space-y-2">
+            <label className="text-xs font-medium text-muted-foreground">Miejscowość</label>
+            <input
+              className="w-full rounded-md border border-border bg-background px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-foreground/20"
+              placeholder="np. Kraków…"
+              value={placeQ}
+              onChange={(e) => setPlaceQ(e.target.value)}
+            />
+
+            <div className="text-xs text-muted-foreground flex items-center justify-between">
+              <div>
+                {placePicked ? (
+                  <span>
+                    Wybrano: <span className="font-medium text-foreground">{placePicked.place_name}</span> • TERC{" "}
+                    {placePicked.terc} • SIMC {placePicked.simc}
+                  </span>
+                ) : (
+                  <span>Wpisz min. 2 znaki, żeby podpowiedziało miejscowości.</span>
+                )}
+              </div>
+              <div>{placeLoading ? "szukam…" : null}</div>
+            </div>
+
+            {!placePicked && placeSug.length > 0 && (
+              <div className="max-h-48 overflow-auto rounded-md border border-border bg-background">
+                {placeSug.map((p) => (
+                  <button
+                    key={`${p.terc}-${p.simc}-${p.place_name}`}
+                    type="button"
+                    className="w-full px-3 py-2 text-left text-sm hover:bg-muted/40"
+                    onClick={() => {
+                      setPlacePicked(p);
+                      setPlaceQ(p.place_name);
+                      setPlaceSug([]);
+                      setStreetPicked(null);
+                      setStreetQ("");
+                      setStreetSug([]);
+                      setBuildings([]);
+                    }}
+                  >
+                    <div className="flex items-center justify-between">
+                      <div className="font-medium">{p.place_name}</div>
+                      <div className="text-xs text-muted-foreground">{fmt(p.buildings_count)} bud.</div>
+                    </div>
+                    <div className="text-xs text-muted-foreground">TERC {p.terc} • SIMC {p.simc}</div>
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+
+          <div className="space-y-2">
+            <label className="text-xs font-medium text-muted-foreground">Ulica</label>
+            <input
+              className="w-full rounded-md border border-border bg-background px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-foreground/20 disabled:opacity-50"
+              placeholder={placePicked ? "np. Długa…" : "Najpierw wybierz miejscowość"}
+              value={streetQ}
+              onChange={(e) => setStreetQ(e.target.value)}
+              disabled={!placePicked}
+            />
+
+            <div className="text-xs text-muted-foreground flex items-center justify-between">
+              <div>
+                {streetPicked ? (
+                  <span>
+                    Wybrano: <span className="font-medium text-foreground">{streetPicked.street_name}</span> • ULIC{" "}
+                    {streetPicked.ulic}
+                  </span>
+                ) : (
+                  <span>Wpisuj litery — dostaniesz listę ulic.</span>
+                )}
+              </div>
+              <div>{streetLoading ? "szukam…" : null}</div>
+            </div>
+
+            {placePicked && !streetPicked && streetSug.length > 0 && (
+              <div className="max-h-48 overflow-auto rounded-md border border-border bg-background">
+                {streetSug.map((s) => (
+                  <button
+                    key={`${s.ulic}-${s.street_name}`}
+                    type="button"
+                    className="w-full px-3 py-2 text-left text-sm hover:bg-muted/40"
+                    onClick={() => {
+                      setStreetPicked(s);
+                      setStreetQ(s.street_name);
+                      setStreetSug([]);
+                      setBuildings([]);
+                      lookupBuildings(placePicked.terc, placePicked.simc, s.ulic);
+                    }}
+                  >
+                    <div className="flex items-center justify-between">
+                      <div className="font-medium">{s.street_name}</div>
+                      <div className="text-xs text-muted-foreground">{fmt(s.buildings_count)} bud.</div>
+                    </div>
+                    <div className="text-xs text-muted-foreground">ULIC {s.ulic}</div>
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+        </div>
+
+        <div className="flex items-center gap-2">
+          <button
+            type="button"
+            className="rounded-md border border-border bg-background px-3 py-2 text-sm hover:bg-muted/40"
+            onClick={() => {
+              setPlaceQ("");
+              setPlaceSug([]);
+              setPlacePicked(null);
+              setStreetQ("");
+              setStreetSug([]);
+              setStreetPicked(null);
+              setBuildings([]);
+              setLookupErr(null);
+            }}
+          >
+            Wyczyść
+          </button>
+
+          <div className="text-xs text-muted-foreground">
+            {buildingsLoading ? "Ładuję budynki…" : buildings.length > 0 ? `Budynki: ${fmt(buildings.length)}` : null}
+          </div>
+        </div>
+
+        {placePicked && streetPicked && (
+          <div className="rounded-md border border-border bg-background p-3">
+            <div className="text-xs font-semibold text-muted-foreground mb-2">Budynki na ulicy</div>
+
+            {buildingsLoading ? (
+              <div className="text-sm text-muted-foreground">Ładowanie…</div>
+            ) : buildings.length === 0 ? (
+              <div className="text-sm text-muted-foreground">Brak wyników.</div>
+            ) : (
+              <div className="max-h-72 overflow-auto">
+                <table className="w-full text-sm">
+                  <thead className="sticky top-0 bg-background">
+                    <tr className="text-left text-xs text-muted-foreground">
+                      <th className="py-2 pr-3">Nr budynku</th>
+                      <th className="py-2 pr-3">TERC</th>
+                      <th className="py-2 pr-3">SIMC</th>
+                      <th className="py-2 pr-3">ULIC</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {buildings.map((b, idx) => (
+                      <tr key={`${b.building_no}-${idx}`} className="border-t border-border">
+                        <td className="py-2 pr-3 font-medium">{b.building_no}</td>
+                        <td className="py-2 pr-3 font-mono text-xs">{b.terc}</td>
+                        <td className="py-2 pr-3 font-mono text-xs">{b.simc}</td>
+                        <td className="py-2 pr-3 font-mono text-xs">{b.ulic || "—"}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </div>
+        )}
       </div>
 
       <div className="text-xs text-muted-foreground">

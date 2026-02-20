@@ -16,7 +16,10 @@ class PrgStateOut(BaseModel):
     last_reconcile_at: Optional[datetime] = None
     source_url: Optional[str] = None
     checksum: Optional[str] = None
+    # Backwards-compatible: UI w pierwszej wersji pokazywało tylko "address_points_count".
+    # W trybie ADRUNI (numery budynków) nie mamy punktów geolokalizacyjnych, więc liczymy rekordy ADRUNI.
     address_points_count: int = 0
+    adruni_building_numbers_count: int = 0
 
 
 class PrgImportRunIn(BaseModel):
@@ -120,3 +123,28 @@ class PrgReconcileQueueItemOut(BaseModel):
     created_at: datetime
     decided_at: Optional[datetime] = None
     decided_by_staff_id: Optional[int] = None
+
+
+# -------------------------
+# PRG lookup (ADRUNI)
+# -------------------------
+
+
+class PrgPlaceSuggestOut(BaseModel):
+    place_name: str
+    terc: str
+    simc: str
+    buildings_count: int = 0
+
+
+class PrgStreetSuggestOut(BaseModel):
+    street_name: str
+    ulic: str
+    buildings_count: int = 0
+
+
+class PrgBuildingOut(BaseModel):
+    building_no: str
+    terc: str
+    simc: str
+    ulic: Optional[str] = None

@@ -1,3 +1,4 @@
+# crm/prg/api/prg_routes.py
 from __future__ import annotations
 
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Query, BackgroundTasks
@@ -10,7 +11,7 @@ from crm.db.models.staff import StaffUser
 from crm.users.identity.rbac.actions import Action
 from crm.users.identity.rbac.dependencies import require
 
-from crm.db.models.prg import PrgReconcileQueue, PrgJob, PrgJobLog, PrgAddressPoint
+from crm.db.models.prg import PrgReconcileQueue, PrgJob, PrgJobLog, PrgAddressPoint, PrgAdruniBuildingNumber
 from crm.prg.schemas import (
     PrgStateOut,
     PrgImportRunIn,
@@ -23,12 +24,19 @@ from crm.prg.schemas import (
     PrgJobOut,
     PrgJobWithLogsOut,
     PrgJobLogOut,
+    PrgPlaceSuggestOut,
+    PrgStreetSuggestOut,
+    PrgBuildingOut,
 )
 from crm.prg.services.prg_service import PrgService, PrgError
 from crm.prg.services.reconcile_service import PrgReconcileService
 
 
 router = APIRouter(prefix="/prg", tags=["prg"])
+
+
+def _norm_q(q: str) -> str:
+    return (q or "").strip()
 
 
 def _point_to_out(p) -> PrgPointOut:
@@ -78,12 +86,25 @@ def prg_state(
 ):
     st = PrgService(db).get_state()
 
-    address_points_count = (
+    # W PRG mamy dwa tryby źródła danych:
+    # 1) "points" (punkty adresowe z koordynatami) -> tabela prg_address_points
+    # 2) "adruni" (numery budynków / rekordy ADRUNI bez koordynatów) -> tabela prg_adruni_building_numbers
+    #
+    # UI w MVP liczyło tylko "address_points_count". Jeśli importujemy ADRUNI, ta tabela jest pusta,
+    # więc UI pokazywało 0 mimo, że ADRUNI jest pełne. Naprawa: liczmy oba i zwracajmy oba.
+    address_points_count = int(
         db.execute(
             select(func.count()).select_from(PrgAddressPoint).where(PrgAddressPoint.status == "active")
         ).scalar_one()
         or 0
     )
+
+    adruni_count = int(
+        db.execute(select(func.count()).select_from(PrgAdruniBuildingNumber)).scalar_one() or 0
+    )
+
+    # Backwards-compat: jeśli punktów jest 0, a ADRUNI ma rekordy, podstawiamy do legacy pola.
+    legacy_count = address_points_count if address_points_count > 0 else adruni_count
 
     return PrgStateOut(
         dataset_version=st.dataset_version,
@@ -93,7 +114,8 @@ def prg_state(
         last_reconcile_at=st.last_reconcile_at,
         source_url=st.source_url,
         checksum=st.checksum,
-        address_points_count=int(address_points_count),
+        address_points_count=int(legacy_count),
+        adruni_building_numbers_count=int(adruni_count),
     )
 
 
@@ -403,6 +425,131 @@ def prg_reconcile_queue_list(
             created_at=r.created_at,
             decided_at=r.decided_at,
             decided_by_staff_id=r.decided_by_staff_id,
+        )
+        for r in rows
+    ]
+
+
+# -------------------------
+# ADRUNI lookup (place → street → buildings)
+# -------------------------
+
+
+@router.get("/lookup/places", response_model=list[PrgPlaceSuggestOut])
+def prg_lookup_places(
+    q: str = Query(..., min_length=1, max_length=64, description="Prefix nazwy miejscowości"),
+    limit: int = Query(default=20, ge=1, le=100),
+    db: Session = Depends(get_db),
+    _me: StaffUser = Depends(require(Action.PRG_IMPORT_RUN)),
+):
+    qq = _norm_q(q)
+    if len(qq) < 1:
+        return []
+
+    # place_name jest w ADRUNI -> szukamy po prefixie (case-insensitive)
+    # i grupujemy po (terc, simc, place_name)
+    rows = db.execute(
+        select(
+            PrgAdruniBuildingNumber.place_name,
+            PrgAdruniBuildingNumber.terc,
+            PrgAdruniBuildingNumber.simc,
+            func.count().label("cnt"),
+        )
+        .where(PrgAdruniBuildingNumber.place_name.is_not(None))
+        .where(func.lower(PrgAdruniBuildingNumber.place_name).like(func.lower(qq) + "%"))
+        .group_by(
+            PrgAdruniBuildingNumber.place_name,
+            PrgAdruniBuildingNumber.terc,
+            PrgAdruniBuildingNumber.simc,
+        )
+        .order_by(func.count().desc())
+        .limit(limit)
+    ).all()
+
+    return [
+        PrgPlaceSuggestOut(
+            place_name=str(r[0]),
+            terc=str(r[1]),
+            simc=str(r[2]),
+            buildings_count=int(r[3] or 0),
+        )
+        for r in rows
+    ]
+
+
+@router.get("/lookup/streets", response_model=list[PrgStreetSuggestOut])
+def prg_lookup_streets(
+    terc: str = Query(..., min_length=1, max_length=8),
+    simc: str = Query(..., min_length=1, max_length=8),
+    q: str = Query("", max_length=64, description="Prefix nazwy ulicy"),
+    limit: int = Query(default=50, ge=1, le=200),
+    db: Session = Depends(get_db),
+    _me: StaffUser = Depends(require(Action.PRG_IMPORT_RUN)),
+):
+    qq = _norm_q(q)
+
+    stmt = (
+        select(
+            PrgAdruniBuildingNumber.street_name,
+            PrgAdruniBuildingNumber.ulic,
+            func.count().label("cnt"),
+        )
+        .where(PrgAdruniBuildingNumber.terc == terc)
+        .where(PrgAdruniBuildingNumber.simc == simc)
+        .where(PrgAdruniBuildingNumber.ulic.is_not(None))
+        .where(PrgAdruniBuildingNumber.street_name.is_not(None))
+    )
+
+    if qq:
+        stmt = stmt.where(func.lower(PrgAdruniBuildingNumber.street_name).like(func.lower(qq) + "%"))
+
+    rows = db.execute(
+        stmt.group_by(PrgAdruniBuildingNumber.street_name, PrgAdruniBuildingNumber.ulic)
+        .order_by(func.count().desc())
+        .limit(limit)
+    ).all()
+
+    return [
+        PrgStreetSuggestOut(
+            street_name=str(r[0]),
+            ulic=str(r[1]),
+            buildings_count=int(r[2] or 0),
+        )
+        for r in rows
+    ]
+
+
+@router.get("/lookup/buildings", response_model=list[PrgBuildingOut])
+def prg_lookup_buildings(
+    terc: str = Query(..., min_length=1, max_length=8),
+    simc: str = Query(..., min_length=1, max_length=8),
+    ulic: str = Query(..., min_length=1, max_length=8),
+    limit: int = Query(default=500, ge=1, le=5000),
+    db: Session = Depends(get_db),
+    _me: StaffUser = Depends(require(Action.PRG_IMPORT_RUN)),
+):
+    # Zwracamy listę budynków na ulicy w danej miejscowości.
+    # Uwaga: potrafi być dużo – limit kontroluje payload.
+    rows = db.execute(
+        select(
+            PrgAdruniBuildingNumber.building_no,
+            PrgAdruniBuildingNumber.terc,
+            PrgAdruniBuildingNumber.simc,
+            PrgAdruniBuildingNumber.ulic,
+        )
+        .where(PrgAdruniBuildingNumber.terc == terc)
+        .where(PrgAdruniBuildingNumber.simc == simc)
+        .where(PrgAdruniBuildingNumber.ulic == ulic)
+        .order_by(PrgAdruniBuildingNumber.building_no_norm.asc(), PrgAdruniBuildingNumber.building_no.asc())
+        .limit(limit)
+    ).all()
+
+    return [
+        PrgBuildingOut(
+            building_no=str(r[0]),
+            terc=str(r[1]),
+            simc=str(r[2]),
+            ulic=str(r[3]) if r[3] is not None else None,
         )
         for r in rows
     ]
