@@ -78,9 +78,29 @@ class StaffUser(Base):
     pesel: Mapped[Optional[str]] = mapped_column(sa.String(11), nullable=True)
     id_document_no: Mapped[Optional[str]] = mapped_column(sa.String(32), nullable=True)
 
-    # Na dziś tekstowo; później podepniemy pod PRG
+    # Legacy: tekstowe adresy (dla UI/eksportów) — utrzymujemy kompatybilność.
     address_registered: Mapped[Optional[str]] = mapped_column(sa.Text, nullable=True)
     address_current: Mapped[Optional[str]] = mapped_column(sa.Text, nullable=True)
+
+    # Canon: PRG/ADRUNI (TERC/SIMC/ULIC + nazwy + numer)
+    # --- Zameldowanie ---
+    address_registered_prg_place_name: Mapped[Optional[str]] = mapped_column(sa.Text, nullable=True)
+    address_registered_prg_terc: Mapped[Optional[str]] = mapped_column(sa.String(8), nullable=True)
+    address_registered_prg_simc: Mapped[Optional[str]] = mapped_column(sa.String(8), nullable=True)
+    address_registered_prg_street_name: Mapped[Optional[str]] = mapped_column(sa.Text, nullable=True)
+    address_registered_prg_ulic: Mapped[Optional[str]] = mapped_column(sa.String(8), nullable=True)
+    address_registered_prg_building_no: Mapped[Optional[str]] = mapped_column(sa.String(32), nullable=True)
+    address_registered_prg_local_no: Mapped[Optional[str]] = mapped_column(sa.String(32), nullable=True)
+
+    # --- Zamieszkanie ---
+    address_current_prg_place_name: Mapped[Optional[str]] = mapped_column(sa.Text, nullable=True)
+    address_current_prg_terc: Mapped[Optional[str]] = mapped_column(sa.String(8), nullable=True)
+    address_current_prg_simc: Mapped[Optional[str]] = mapped_column(sa.String(8), nullable=True)
+    address_current_prg_street_name: Mapped[Optional[str]] = mapped_column(sa.Text, nullable=True)
+    address_current_prg_ulic: Mapped[Optional[str]] = mapped_column(sa.String(8), nullable=True)
+    address_current_prg_building_no: Mapped[Optional[str]] = mapped_column(sa.String(32), nullable=True)
+    address_current_prg_local_no: Mapped[Optional[str]] = mapped_column(sa.String(32), nullable=True)
+
     address_current_same_as_registered: Mapped[bool] = mapped_column(
         sa.Boolean,
         nullable=False,

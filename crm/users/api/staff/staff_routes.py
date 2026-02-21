@@ -44,6 +44,16 @@ from crm.users.services.rbac.admin_service import (
 router = APIRouter(prefix="/staff", tags=["staff"])
 
 
+class StaffAddressPrg(BaseModel):
+    place_name: Optional[str] = None
+    terc: Optional[str] = None
+    simc: Optional[str] = None
+    street_name: Optional[str] = None
+    ulic: Optional[str] = None
+    building_no: Optional[str] = None
+    local_no: Optional[str] = None
+
+
 class StaffCreateIn(BaseModel):
     # Docelowo: imię/nazwisko/login/email_prywatny/telefon_firmowy
     first_name: str = Field(..., min_length=1, max_length=80)
@@ -67,8 +77,15 @@ class StaffUpdateIn(BaseModel):
     birth_date: Optional[date] = None
     pesel: Optional[str] = Field(default=None, max_length=11)
     id_document_no: Optional[str] = Field(default=None, max_length=32)
+
+    # legacy (utrzymujemy)
     address_registered: Optional[str] = None
     address_current: Optional[str] = None
+
+    # ✅ PRG canon
+    address_registered_prg: Optional[StaffAddressPrg] = None
+    address_current_prg: Optional[StaffAddressPrg] = None
+
     address_current_same_as_registered: Optional[bool] = None
 
     # bezpieczeństwo (policy: admin może wymusić/zdjąć requirement MFA)
@@ -96,13 +113,53 @@ class StaffOut(BaseModel):
     birth_date: Optional[str] = None
     pesel: Optional[str] = None
     id_document_no: Optional[str] = None
+
+    # legacy
     address_registered: Optional[str] = None
     address_current: Optional[str] = None
     address_current_same_as_registered: Optional[bool] = None
 
+    # ✅ PRG canon
+    address_registered_prg: Optional[StaffAddressPrg] = None
+    address_current_prg: Optional[StaffAddressPrg] = None
+
     @classmethod
     def from_model(cls, u: StaffUser) -> "StaffOut":
         bd = getattr(u, "birth_date", None)
+
+        reg_prg = StaffAddressPrg(
+            place_name=getattr(u, "address_registered_prg_place_name", None),
+            terc=getattr(u, "address_registered_prg_terc", None),
+            simc=getattr(u, "address_registered_prg_simc", None),
+            street_name=getattr(u, "address_registered_prg_street_name", None),
+            ulic=getattr(u, "address_registered_prg_ulic", None),
+            building_no=getattr(u, "address_registered_prg_building_no", None),
+            local_no=getattr(u, "address_registered_prg_local_no", None),
+        )
+
+        cur_prg = StaffAddressPrg(
+            place_name=getattr(u, "address_current_prg_place_name", None),
+            terc=getattr(u, "address_current_prg_terc", None),
+            simc=getattr(u, "address_current_prg_simc", None),
+            street_name=getattr(u, "address_current_prg_street_name", None),
+            ulic=getattr(u, "address_current_prg_ulic", None),
+            building_no=getattr(u, "address_current_prg_building_no", None),
+            local_no=getattr(u, "address_current_prg_local_no", None),
+        )
+
+        def _is_empty(x: StaffAddressPrg) -> bool:
+            return not any(
+                [
+                    x.place_name,
+                    x.terc,
+                    x.simc,
+                    x.street_name,
+                    x.ulic,
+                    x.building_no,
+                    x.local_no,
+                ]
+            )
+
         return cls(
             id=int(u.id),
             username=u.username,
@@ -119,9 +176,13 @@ class StaffOut(BaseModel):
             birth_date=bd.isoformat() if bd else None,
             pesel=getattr(u, "pesel", None),
             id_document_no=getattr(u, "id_document_no", None),
+
             address_registered=getattr(u, "address_registered", None),
             address_current=getattr(u, "address_current", None),
             address_current_same_as_registered=getattr(u, "address_current_same_as_registered", None),
+
+            address_registered_prg=None if _is_empty(reg_prg) else reg_prg,
+            address_current_prg=None if _is_empty(cur_prg) else cur_prg,
         )
 
 
@@ -259,8 +320,11 @@ def admin_create_staff(
             email=str(payload.email),
             phone_company=payload.phone_company,
         )
+        db.commit()
+        db.refresh(u)
         return StaffOut.from_model(u)
     except StaffAdminError as e:
+        db.rollback()
         raise HTTPException(status_code=400, detail=str(e)) from e
 
 

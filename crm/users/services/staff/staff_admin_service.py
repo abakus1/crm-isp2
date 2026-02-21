@@ -177,6 +177,88 @@ def _send_reset_totp_best_effort(
         )
 
 
+def _prg_norm_code(v: Any, *, max_len: int) -> Optional[str]:
+    if v is None:
+        return None
+    s = str(v).strip()
+    if not s:
+        return None
+    # PRG/TERYT są zwykle numeryczne, ale nie ryzykujemy "int()" (leading zeros)
+    if len(s) > max_len:
+        raise StaffAdminError("Nieprawidłowa długość kodu PRG/TERYT")
+    return s
+
+
+def _prg_norm_text(v: Any) -> Optional[str]:
+    if v is None:
+        return None
+    s = str(v).strip()
+    return s or None
+
+
+def _apply_prg_address_patch(
+    *,
+    target: StaffUser,
+    field_prefix: str,  # "address_registered" albo "address_current"
+    prg: Optional[dict],
+) -> None:
+    """Mapuje address_*_prg (dict) na kolumny modelu StaffUser."""
+    if prg is None:
+        return
+
+    # Akceptujemy dokładnie te klucze (resztę olewamy, bo Pydantic i tak filtruje,
+    # ale patch może przyjść z .model_dump() w różnej formie).
+    place_name = _prg_norm_text(prg.get("place_name"))
+    terc = _prg_norm_code(prg.get("terc"), max_len=8)
+    simc = _prg_norm_code(prg.get("simc"), max_len=8)
+    street_name = _prg_norm_text(prg.get("street_name"))
+    ulic = _prg_norm_code(prg.get("ulic"), max_len=8)
+    building_no = _prg_norm_code(prg.get("building_no"), max_len=32)
+    local_no = _prg_norm_code(prg.get("local_no"), max_len=32)
+
+    setattr(target, f"{field_prefix}_prg_place_name", place_name)
+    setattr(target, f"{field_prefix}_prg_terc", terc)
+    setattr(target, f"{field_prefix}_prg_simc", simc)
+    setattr(target, f"{field_prefix}_prg_street_name", street_name)
+    setattr(target, f"{field_prefix}_prg_ulic", ulic)
+    setattr(target, f"{field_prefix}_prg_building_no", building_no)
+    setattr(target, f"{field_prefix}_prg_local_no", local_no)
+
+
+def _format_legacy_address_from_prg(prg: dict) -> Optional[str]:
+    """Skleja człowieczy adres (legacy string) z PRG pól.
+    To jest “best effort” – nie jest źródłem prawdy, ale UI/eksporty mogą to lubić.
+    """
+    if not prg:
+        return None
+
+    place = _prg_norm_text(prg.get("place_name"))
+    street = _prg_norm_text(prg.get("street_name"))
+    building = _prg_norm_text(prg.get("building_no"))
+    local = _prg_norm_text(prg.get("local_no"))
+
+    parts = []
+    if place:
+        parts.append(place)
+
+    street_part = None
+    if street and building:
+        street_part = f"{street} {building}"
+    elif street:
+        street_part = street
+    elif building:
+        street_part = building
+
+    if street_part:
+        parts.append(street_part)
+
+    if local:
+        parts.append(f"lok. {local}")
+
+    s = ", ".join(parts).strip()
+    return s or None
+
+
 def create_staff_user(
     db: Session,
     *,
@@ -411,6 +493,8 @@ def update_staff_profile(
         "id_document_no",
         "address_registered",
         "address_current",
+        "address_registered_prg",
+        "address_current_prg",
         "address_current_same_as_registered",
         "mfa_required",
     }
@@ -432,6 +516,26 @@ def update_staff_profile(
         "address_current": target.address_current,
         "address_current_same_as_registered": bool(target.address_current_same_as_registered),
         "mfa_required": bool(target.mfa_required),
+
+        # PRG snapshot (dla audytu)
+        "address_registered_prg": {
+            "place_name": getattr(target, "address_registered_prg_place_name", None),
+            "terc": getattr(target, "address_registered_prg_terc", None),
+            "simc": getattr(target, "address_registered_prg_simc", None),
+            "street_name": getattr(target, "address_registered_prg_street_name", None),
+            "ulic": getattr(target, "address_registered_prg_ulic", None),
+            "building_no": getattr(target, "address_registered_prg_building_no", None),
+            "local_no": getattr(target, "address_registered_prg_local_no", None),
+        },
+        "address_current_prg": {
+            "place_name": getattr(target, "address_current_prg_place_name", None),
+            "terc": getattr(target, "address_current_prg_terc", None),
+            "simc": getattr(target, "address_current_prg_simc", None),
+            "street_name": getattr(target, "address_current_prg_street_name", None),
+            "ulic": getattr(target, "address_current_prg_ulic", None),
+            "building_no": getattr(target, "address_current_prg_building_no", None),
+            "local_no": getattr(target, "address_current_prg_local_no", None),
+        },
     }
 
     # email uniqueness (case-insensitive)
@@ -480,7 +584,48 @@ def update_staff_profile(
             except ValueError as e:
                 raise StaffAdminError("Invalid birth_date") from e
 
-    # apply
+    # --- PRG address patch (canonical) ---
+    reg_prg = patch.get("address_registered_prg", None)
+    cur_prg = patch.get("address_current_prg", None)
+
+    # Pydantic daje nam BaseModel -> po drodze może zostać dict, ale czasem jest obiektem:
+    if reg_prg is not None and not isinstance(reg_prg, dict):
+        reg_prg = dict(reg_prg)
+    if cur_prg is not None and not isinstance(cur_prg, dict):
+        cur_prg = dict(cur_prg)
+
+    if reg_prg is not None:
+        _apply_prg_address_patch(target=target, field_prefix="address_registered", prg=reg_prg)
+        # best effort: utrzymuj legacy string jeśli admin nie podał własnego
+        if "address_registered" not in patch:
+            patch["address_registered"] = _format_legacy_address_from_prg(reg_prg)
+
+    if cur_prg is not None:
+        _apply_prg_address_patch(target=target, field_prefix="address_current", prg=cur_prg)
+        if "address_current" not in patch:
+            patch["address_current"] = _format_legacy_address_from_prg(cur_prg)
+
+    # honoruj "same as registered" (jeśli przyszło true)
+    # - jeśli admin ustawia True, to current adres (PRG + legacy) kopiuje się z registered
+    # - jeśli admin ustawia False, nic nie kopiujemy (zostaje to co podał / było w DB)
+    if patch.get("address_current_same_as_registered") is True:
+        # legacy
+        patch["address_current"] = patch.get("address_registered", target.address_registered)
+
+        # PRG: kopiujemy wartości z registered -> current
+        setattr(target, "address_current_prg_place_name", getattr(target, "address_registered_prg_place_name", None))
+        setattr(target, "address_current_prg_terc", getattr(target, "address_registered_prg_terc", None))
+        setattr(target, "address_current_prg_simc", getattr(target, "address_registered_prg_simc", None))
+        setattr(target, "address_current_prg_street_name", getattr(target, "address_registered_prg_street_name", None))
+        setattr(target, "address_current_prg_ulic", getattr(target, "address_registered_prg_ulic", None))
+        setattr(target, "address_current_prg_building_no", getattr(target, "address_registered_prg_building_no", None))
+        setattr(target, "address_current_prg_local_no", getattr(target, "address_registered_prg_local_no", None))
+
+    # PRG dict-y nie są polami modelu -> usuwamy z patch zanim zrobimy setattr loop
+    patch.pop("address_registered_prg", None)
+    patch.pop("address_current_prg", None)
+
+    # apply zwykłych pól
     for k, v in patch.items():
         setattr(target, k, v)
 
@@ -499,6 +644,25 @@ def update_staff_profile(
         "address_current": target.address_current,
         "address_current_same_as_registered": bool(target.address_current_same_as_registered),
         "mfa_required": bool(target.mfa_required),
+
+        "address_registered_prg": {
+            "place_name": getattr(target, "address_registered_prg_place_name", None),
+            "terc": getattr(target, "address_registered_prg_terc", None),
+            "simc": getattr(target, "address_registered_prg_simc", None),
+            "street_name": getattr(target, "address_registered_prg_street_name", None),
+            "ulic": getattr(target, "address_registered_prg_ulic", None),
+            "building_no": getattr(target, "address_registered_prg_building_no", None),
+            "local_no": getattr(target, "address_registered_prg_local_no", None),
+        },
+        "address_current_prg": {
+            "place_name": getattr(target, "address_current_prg_place_name", None),
+            "terc": getattr(target, "address_current_prg_terc", None),
+            "simc": getattr(target, "address_current_prg_simc", None),
+            "street_name": getattr(target, "address_current_prg_street_name", None),
+            "ulic": getattr(target, "address_current_prg_ulic", None),
+            "building_no": getattr(target, "address_current_prg_building_no", None),
+            "local_no": getattr(target, "address_current_prg_local_no", None),
+        },
     }
 
     _audit(

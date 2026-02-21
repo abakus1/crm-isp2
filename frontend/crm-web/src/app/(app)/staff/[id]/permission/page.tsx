@@ -8,6 +8,17 @@ import { apiFetch, ApiError } from "@/lib/api";
 import { useAuth } from "@/lib/auth";
 import { usePermissions } from "@/lib/permissions";
 import { SimpleModal } from "@/components/SimpleModal";
+import { PrgAddressFinder, PrgAddressPick } from "@/components/PrgAddressFinder";
+
+type StaffAddressPrg = {
+  place_name: string;
+  terc: string;
+  simc: string;
+  street_name: string;
+  ulic: string;
+  building_no: string;
+  local_no?: string | null;
+};
 
 type StaffOut = {
   id: number;
@@ -25,8 +36,15 @@ type StaffOut = {
   birth_date?: string | null;
   pesel?: string | null;
   id_document_no?: string | null;
+
+  // legacy
   address_registered?: string | null;
   address_current?: string | null;
+
+  // PRG structured (nowe)
+  address_registered_prg?: StaffAddressPrg | null;
+  address_current_prg?: StaffAddressPrg | null;
+
   address_current_same_as_registered?: boolean;
 };
 
@@ -52,6 +70,32 @@ function Pill({ tone, text }: { tone: "ok" | "warn" | "muted"; text: string }) {
   const cls =
     tone === "ok" ? "bg-emerald-500/10" : tone === "warn" ? "bg-amber-500/10" : "bg-muted/40";
   return <span className={`${base} ${cls}`}>{text}</span>;
+}
+
+function formatPrgAddress(prg: StaffAddressPrg | null | undefined) {
+  if (!prg) return "";
+  const parts: string[] = [];
+  if (prg.place_name) parts.push(prg.place_name);
+
+  const streetAndNo = [prg.street_name, prg.building_no].filter(Boolean).join(" ");
+  if (streetAndNo) parts.push(streetAndNo);
+
+  if (prg.local_no) parts.push(`lok. ${prg.local_no}`);
+
+  const s = parts.join(", ").trim();
+  return s || "";
+}
+
+function pickToPrg(p: PrgAddressPick): StaffAddressPrg {
+  return {
+    place_name: p.place_name,
+    terc: p.terc,
+    simc: p.simc,
+    street_name: p.street_name,
+    ulic: p.ulic,
+    building_no: p.building_no,
+    local_no: null,
+  };
 }
 
 export default function StaffManagePage() {
@@ -84,8 +128,15 @@ export default function StaffManagePage() {
   const [pBirth, setPBirth] = useState("");
   const [pPesel, setPPesel] = useState("");
   const [pDoc, setPDoc] = useState("");
+
+  // legacy (textarea)
   const [pAddrReg, setPAddrReg] = useState("");
   const [pAddrCur, setPAddrCur] = useState("");
+
+  // PRG structured (finder)
+  const [pAddrRegPrg, setPAddrRegPrg] = useState<StaffAddressPrg | null>(null);
+  const [pAddrCurPrg, setPAddrCurPrg] = useState<StaffAddressPrg | null>(null);
+
   const [pAddrSame, setPAddrSame] = useState(true);
   const [pMfaReq, setPMfaReq] = useState(true);
 
@@ -178,8 +229,17 @@ export default function StaffManagePage() {
     setPBirth(u.birth_date || "");
     setPPesel(u.pesel || "");
     setPDoc(u.id_document_no || "");
-    setPAddrReg(u.address_registered || "");
-    setPAddrCur(u.address_current || "");
+
+    // PRG first
+    const regPrg = u.address_registered_prg || null;
+    const curPrg = u.address_current_prg || null;
+    setPAddrRegPrg(regPrg);
+    setPAddrCurPrg(curPrg);
+
+    // legacy (best effort)
+    setPAddrReg(u.address_registered || formatPrgAddress(regPrg) || "");
+    setPAddrCur(u.address_current || formatPrgAddress(curPrg) || "");
+
     setPAddrSame(!!u.address_current_same_as_registered);
     setPMfaReq(!!u.mfa_required);
   }
@@ -238,7 +298,6 @@ export default function StaffManagePage() {
       setOk("Rola zapisana. Pracownik dostanie relogin (token_version++). ✅");
       setOpenRole(false);
 
-      // role wpływa na resolved perms
       await loadAll();
     } catch (e: any) {
       const err = e as ApiError;
@@ -269,8 +328,15 @@ export default function StaffManagePage() {
           birth_date: pBirth || null,
           pesel: pPesel || null,
           id_document_no: pDoc || null,
+
+          // legacy
           address_registered: pAddrReg || null,
           address_current: pAddrSame ? null : pAddrCur || null,
+
+          // structured PRG
+          address_registered_prg: pAddrRegPrg || null,
+          address_current_prg: pAddrSame ? null : pAddrCurPrg || null,
+
           address_current_same_as_registered: pAddrSame,
           mfa_required: pMfaReq,
         },
@@ -281,7 +347,6 @@ export default function StaffManagePage() {
       setOk("Profil zapisany ✅");
       setOpenProfile(false);
 
-      // odśwież też resolved, bo mfa_required jest w karcie
       await loadAll();
     } catch (e: any) {
       const err = e as ApiError;
@@ -304,7 +369,6 @@ export default function StaffManagePage() {
     try {
       if (!canPermWrite) throw new ApiError(403, "Brak uprawnienia: staff.permissions.write");
 
-      // wysyłamy tylko delty (w tym removale -> null)
       const patch: Record<string, OverrideEffect> = {};
       const keys = new Set([...Object.keys(overrides), ...Object.keys(originalOverrides)]);
       for (const k of keys) {
@@ -321,7 +385,6 @@ export default function StaffManagePage() {
       });
 
       setOk("Uprawnienia indywidualne zapisane ✅");
-      // reload so source/allowed are correct
       await loadAll();
     } catch (e: any) {
       const err = e as ApiError;
@@ -600,127 +663,171 @@ export default function StaffManagePage() {
       <SimpleModal
         open={openProfile}
         title="Edytuj profil pracownika"
+        // tu sztuczka: większy, nieprzezroczysty modal "wide"
+        className="max-w-5xl w-[min(92vw,1100px)]"
         onClose={() => {
           if (saving) return;
           setOpenProfile(false);
         }}
       >
-        <div className="space-y-4">
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-            <label className="space-y-1">
-              <div className="text-xs text-muted-foreground">Imię</div>
-              <input
-                value={pFirst}
-                onChange={(e) => setPFirst(e.target.value)}
-                className="h-10 w-full rounded-md border border-border bg-background px-3 text-sm"
-              />
-            </label>
-            <label className="space-y-1">
-              <div className="text-xs text-muted-foreground">Nazwisko</div>
-              <input
-                value={pLast}
-                onChange={(e) => setPLast(e.target.value)}
-                className="h-10 w-full rounded-md border border-border bg-background px-3 text-sm"
-              />
-            </label>
+        <div className="rounded-xl border border-border bg-card p-4 shadow-sm">
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+            {/* LEFT */}
+            <div className="space-y-4">
+              <div className="text-xs font-semibold">Dane podstawowe</div>
 
-            <label className="space-y-1">
-              <div className="text-xs text-muted-foreground">Email</div>
-              <input
-                value={pEmail}
-                onChange={(e) => setPEmail(e.target.value)}
-                className="h-10 w-full rounded-md border border-border bg-background px-3 text-sm"
-              />
-            </label>
-            <label className="space-y-1">
-              <div className="text-xs text-muted-foreground">Telefon firmowy</div>
-              <input
-                value={pPhone}
-                onChange={(e) => setPPhone(e.target.value)}
-                className="h-10 w-full rounded-md border border-border bg-background px-3 text-sm"
-              />
-            </label>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                <label className="space-y-1">
+                  <div className="text-xs text-muted-foreground">Imię</div>
+                  <input
+                    value={pFirst}
+                    onChange={(e) => setPFirst(e.target.value)}
+                    className="h-10 w-full rounded-md border border-border bg-background px-3 text-sm"
+                  />
+                </label>
+                <label className="space-y-1">
+                  <div className="text-xs text-muted-foreground">Nazwisko</div>
+                  <input
+                    value={pLast}
+                    onChange={(e) => setPLast(e.target.value)}
+                    className="h-10 w-full rounded-md border border-border bg-background px-3 text-sm"
+                  />
+                </label>
 
-            <label className="space-y-1">
-              <div className="text-xs text-muted-foreground">Stanowisko</div>
-              <input
-                value={pTitle}
-                onChange={(e) => setPTitle(e.target.value)}
-                className="h-10 w-full rounded-md border border-border bg-background px-3 text-sm"
-              />
-            </label>
-            <label className="space-y-1">
-              <div className="text-xs text-muted-foreground">Data urodzenia (YYYY-MM-DD)</div>
-              <input
-                value={pBirth}
-                onChange={(e) => setPBirth(e.target.value)}
-                className="h-10 w-full rounded-md border border-border bg-background px-3 text-sm"
-              />
-            </label>
+                <label className="space-y-1 md:col-span-2">
+                  <div className="text-xs text-muted-foreground">Email</div>
+                  <input
+                    value={pEmail}
+                    onChange={(e) => setPEmail(e.target.value)}
+                    className="h-10 w-full rounded-md border border-border bg-background px-3 text-sm"
+                  />
+                </label>
 
-            <label className="space-y-1">
-              <div className="text-xs text-muted-foreground">PESEL</div>
-              <input
-                value={pPesel}
-                onChange={(e) => setPPesel(e.target.value)}
-                className="h-10 w-full rounded-md border border-border bg-background px-3 text-sm"
-              />
-            </label>
-            <label className="space-y-1">
-              <div className="text-xs text-muted-foreground">Dowód (seria/nr)</div>
-              <input
-                value={pDoc}
-                onChange={(e) => setPDoc(e.target.value)}
-                className="h-10 w-full rounded-md border border-border bg-background px-3 text-sm"
-              />
-            </label>
-          </div>
+                <label className="space-y-1">
+                  <div className="text-xs text-muted-foreground">Telefon firmowy</div>
+                  <input
+                    value={pPhone}
+                    onChange={(e) => setPPhone(e.target.value)}
+                    className="h-10 w-full rounded-md border border-border bg-background px-3 text-sm"
+                  />
+                </label>
+                <label className="space-y-1">
+                  <div className="text-xs text-muted-foreground">Stanowisko</div>
+                  <input
+                    value={pTitle}
+                    onChange={(e) => setPTitle(e.target.value)}
+                    className="h-10 w-full rounded-md border border-border bg-background px-3 text-sm"
+                  />
+                </label>
+              </div>
 
-          <div className="space-y-2">
-            <div className="text-xs font-semibold">Adresy</div>
-            <label className="space-y-1 block">
-              <div className="text-xs text-muted-foreground">Adres zameldowania</div>
-              <textarea
-                value={pAddrReg}
-                onChange={(e) => setPAddrReg(e.target.value)}
-                className="min-h-[72px] w-full rounded-md border border-border bg-background px-3 py-2 text-sm"
-              />
-            </label>
+              <div className="text-xs font-semibold">Dokumenty</div>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                <label className="space-y-1">
+                  <div className="text-xs text-muted-foreground">Data urodzenia (YYYY-MM-DD)</div>
+                  <input
+                    value={pBirth}
+                    onChange={(e) => setPBirth(e.target.value)}
+                    className="h-10 w-full rounded-md border border-border bg-background px-3 text-sm"
+                  />
+                </label>
+                <label className="space-y-1">
+                  <div className="text-xs text-muted-foreground">PESEL</div>
+                  <input
+                    value={pPesel}
+                    onChange={(e) => setPPesel(e.target.value)}
+                    className="h-10 w-full rounded-md border border-border bg-background px-3 text-sm"
+                  />
+                </label>
+                <label className="space-y-1 md:col-span-2">
+                  <div className="text-xs text-muted-foreground">Dowód (seria/nr)</div>
+                  <input
+                    value={pDoc}
+                    onChange={(e) => setPDoc(e.target.value)}
+                    className="h-10 w-full rounded-md border border-border bg-background px-3 text-sm"
+                  />
+                </label>
+              </div>
+            </div>
 
-            <label className="flex items-center gap-2 text-sm">
-              <input
-                type="checkbox"
-                checked={pAddrSame}
-                onChange={(e) => setPAddrSame(e.target.checked)}
-              />
-              <span>Adres zamieszkania taki sam jak zameldowania</span>
-            </label>
+            {/* RIGHT */}
+            <div className="space-y-4">
+              <div className="text-xs font-semibold">Adresy (PRG/ADRUNI)</div>
 
-            {!pAddrSame && (
+              <PrgAddressFinder
+                title="Adres zameldowania"
+                description="Wybierz lokalizację z PRG. Po wyborze uzupełnimy też pole tekstowe (legacy)."
+                disabled={saving}
+                onPick={(picked) => {
+                  const prg = pickToPrg(picked);
+                  setPAddrRegPrg(prg);
+                  setPAddrReg(formatPrgAddress(prg));
+
+                  if (pAddrSame) {
+                    setPAddrCurPrg(null);
+                    setPAddrCur("");
+                  }
+                }}
+              />
+
               <label className="space-y-1 block">
-                <div className="text-xs text-muted-foreground">Adres zamieszkania</div>
+                <div className="text-xs text-muted-foreground">Adres zameldowania (tekst / legacy)</div>
                 <textarea
-                  value={pAddrCur}
-                  onChange={(e) => setPAddrCur(e.target.value)}
-                  className="min-h-[72px] w-full rounded-md border border-border bg-background px-3 py-2 text-sm"
+                  value={pAddrReg}
+                  onChange={(e) => setPAddrReg(e.target.value)}
+                  className="min-h-[56px] w-full rounded-md border border-border bg-background px-3 py-2 text-sm"
                 />
               </label>
-            )}
+
+              <label className="flex items-center gap-2 text-sm">
+                <input
+                  type="checkbox"
+                  checked={pAddrSame}
+                  onChange={(e) => {
+                    const checked = e.target.checked;
+                    setPAddrSame(checked);
+                    if (checked) {
+                      setPAddrCur("");
+                      setPAddrCurPrg(null);
+                    }
+                  }}
+                />
+                <span>Adres zamieszkania taki sam jak zameldowania</span>
+              </label>
+
+              {!pAddrSame && (
+                <div className="space-y-3">
+                  <PrgAddressFinder
+                    title="Adres zamieszkania"
+                    description="Wybierz lokalizację z PRG dla adresu zamieszkania."
+                    disabled={saving}
+                    onPick={(picked) => {
+                      const prg = pickToPrg(picked);
+                      setPAddrCurPrg(prg);
+                      setPAddrCur(formatPrgAddress(prg));
+                    }}
+                  />
+
+                  <label className="space-y-1 block">
+                    <div className="text-xs text-muted-foreground">Adres zamieszkania (tekst / legacy)</div>
+                    <textarea
+                      value={pAddrCur}
+                      onChange={(e) => setPAddrCur(e.target.value)}
+                      className="min-h-[56px] w-full rounded-md border border-border bg-background px-3 py-2 text-sm"
+                    />
+                  </label>
+                </div>
+              )}
+
+              <div className="text-xs font-semibold">Bezpieczeństwo</div>
+              <label className="flex items-center gap-2 text-sm">
+                <input type="checkbox" checked={pMfaReq} onChange={(e) => setPMfaReq(e.target.checked)} />
+                <span>Wymagane MFA (TOTP)</span>
+              </label>
+            </div>
           </div>
 
-          <div className="space-y-2">
-            <div className="text-xs font-semibold">Bezpieczeństwo</div>
-            <label className="flex items-center gap-2 text-sm">
-              <input
-                type="checkbox"
-                checked={pMfaReq}
-                onChange={(e) => setPMfaReq(e.target.checked)}
-              />
-              <span>Wymagane MFA (TOTP)</span>
-            </label>
-          </div>
-
-          <div className="flex items-center justify-end gap-2">
+          <div className="mt-4 flex items-center justify-end gap-2">
             <button
               onClick={() => setOpenProfile(false)}
               disabled={saving}

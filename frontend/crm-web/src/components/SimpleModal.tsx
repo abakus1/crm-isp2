@@ -1,3 +1,4 @@
+// frontend/crm-web/src/components/SimpleModal.tsx
 "use client";
 
 import React from "react";
@@ -9,6 +10,7 @@ export function SimpleModal({
   children,
   footer,
   onClose,
+  className,
 }: {
   open: boolean;
   title: string;
@@ -16,6 +18,7 @@ export function SimpleModal({
   children: React.ReactNode;
   footer?: React.ReactNode;
   onClose: () => void;
+  className?: string;
 }) {
   if (!open) return null;
 
@@ -23,7 +26,12 @@ export function SimpleModal({
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
       <div className="absolute inset-0 bg-black/40" onClick={onClose} />
 
-      <div className="relative w-full max-w-lg rounded-xl border border-border bg-card shadow-xl">
+      <div
+        className={[
+          "relative w-full max-w-lg rounded-xl border border-border bg-card shadow-xl",
+          className || "",
+        ].join(" ")}
+      >
         <div className="p-4 border-b border-border">
           <div className="text-sm font-semibold">{title}</div>
           {description ? (
