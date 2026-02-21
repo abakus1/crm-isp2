@@ -223,29 +223,14 @@ export default function StaffDetailsPage() {
   }
 
   async function load() {
+    if (!token || !Number.isFinite(staffId)) return;
+
     setError(null);
     setToast(null);
     setBusy(true);
-
     try {
-      const who = me ?? (await loadMe());
-      if (!who) {
-        setU(null);
-        return;
-      }
+      const who = await loadMe();
 
-      // staff bez uprawnień zobaczy siebie przez /staff/self
-      if (who.staff_id === staffId) {
-        const data = await apiFetch<StaffOut>("/staff/self", {
-          method: "GET",
-          token,
-          onUnauthorized: handleUnauthorized,
-        });
-        setU(data);
-        return;
-      }
-
-      // admin/uprawniony: /staff/{id}
       if (!perms.has("staff.read")) {
         throw new ApiError(403, "Brak uprawnienia: staff.read");
       }
@@ -264,7 +249,7 @@ export default function StaffDetailsPage() {
     }
   }
 
-  async function postAction(path: string, okMsg: string) {
+  async function postAction(path: string, okMsg: string, body?: any) {
     setError(null);
     setToast(null);
     setBusy(true);
@@ -273,8 +258,10 @@ export default function StaffDetailsPage() {
         method: "POST",
         token,
         onUnauthorized: handleUnauthorized,
+        body: body ?? undefined,
       });
       setToast(okMsg);
+      await load();
     } catch (e: any) {
       const err = e as ApiError;
       setError(err.message || "Błąd operacji");
@@ -379,6 +366,34 @@ export default function StaffDetailsPage() {
             Odblokuj
           </button>
         )}
+
+        {perms.has("staff.archive") && u?.status === "disabled" && (
+          <button
+            onClick={() =>
+              postAction(
+                `/staff/${staffId}/archive`,
+                "Przeniesiono pracownika do archiwum",
+                { reason: null }
+              )
+            }
+            disabled={busy}
+            className="rounded-md border border-border px-3 py-2 text-sm hover:bg-muted/60 disabled:opacity-60"
+            title="Do archiwum można przenieść tylko zablokowanego pracownika"
+          >
+            Archiwizuj
+          </button>
+        )}
+
+        {perms.has("staff.unarchive") && u?.status === "archived" && (
+          <button
+            onClick={() => postAction(`/staff/${staffId}/unarchive`, "Przywrócono pracownika (status: disabled)")}
+            disabled={busy}
+            className="rounded-md border border-border px-3 py-2 text-sm hover:bg-muted/60 disabled:opacity-60"
+            title="Przywraca pracownika z archiwum do statusu disabled (bez logowania)"
+          >
+            Przywróć z archiwum
+          </button>
+        )}
       </div>
 
       {/* Content */}
@@ -429,32 +444,29 @@ export default function StaffDetailsPage() {
               <div className="rounded-lg border border-border p-4 lg:col-span-2">
                 <div className="text-xs font-semibold mb-2">Adresy</div>
 
-                <div className="py-2 border-b border-border">
-                  <div className="text-xs text-muted-foreground mb-1">Adres zameldowania</div>
-                  <AddressSummary prg={u.address_registered_prg} legacy={u.address_registered} />
-                  <AddressFields prg={u.address_registered_prg} />
-                </div>
+                <div className="grid grid-cols-1 lg:grid-cols-2 gap-3">
+                  <div className="rounded-lg border border-border p-3">
+                    <div className="text-xs text-muted-foreground">Zameldowanie</div>
+                    <div className="mt-1">
+                      <AddressSummary prg={u.address_registered_prg} legacy={u.address_registered} />
+                      <AddressFields prg={u.address_registered_prg} />
+                    </div>
+                  </div>
 
-                <div className="py-2">
-                  <div className="text-xs text-muted-foreground mb-1">Adres zamieszkania</div>
-                  {u.address_current_same_as_registered ? (
-                    <div className="text-sm">(taki sam jak zameldowania)</div>
-                  ) : (
-                    <>
+                  <div className="rounded-lg border border-border p-3">
+                    <div className="text-xs text-muted-foreground">Zamieszkanie</div>
+                    <div className="mt-1">
                       <AddressSummary prg={u.address_current_prg} legacy={u.address_current} />
                       <AddressFields prg={u.address_current_prg} />
-                    </>
-                  )}
+                    </div>
+                  </div>
                 </div>
               </div>
 
               <div className="rounded-lg border border-border p-4 lg:col-span-2">
                 <div className="text-xs font-semibold mb-2">Bezpieczeństwo</div>
-                <FieldRow
-                  label="Wymuszona zmiana hasła"
-                  value={u.must_change_credentials ? "tak" : "nie"}
-                />
-                <FieldRow label="Wymagane MFA" value={u.mfa_required ? "tak" : "nie"} />
+                <FieldRow label="must_change_credentials" value={String(u.must_change_credentials)} />
+                <FieldRow label="mfa_required" value={String(u.mfa_required)} />
               </div>
             </div>
           )}

@@ -114,6 +114,10 @@ def disable_staff_user(
 
     before = {"status": str(user.status), "token_version": int(user.token_version)}
 
+    # Nie pozwalamy "cofać" archiwum przez disable (do tego jest unarchive -> disabled)
+    if str(user.status) == "archived":
+        raise StaffAccessError("Nie można zablokować pracownika w archiwum. Najpierw przywróć z archiwum.")
+
     if user.status == "disabled":
         # idempotentnie: nie robimy dramatu
         return StaffAccessResult(
@@ -190,6 +194,11 @@ def archive_staff_user(
             token_version=int(user.token_version),
         )
 
+    # Wymaganie biznesowe: do archiwum można przenieść TYLKO pracownika zablokowanego.
+    # (Najpierw disable, potem archive.)
+    if str(user.status) != "disabled":
+        raise StaffAccessError("Do archiwum można przenieść tylko zablokowanego pracownika (status=disabled).")
+
     user.status = "archived"
     user.archived_at = _utcnow()
     user.archived_reason = (reason or "").strip() or None
@@ -249,7 +258,8 @@ def unarchive_staff_user(
 
     before = {"status": str(user.status), "token_version": int(user.token_version)}
 
-    if user.status == "active":
+    # Idempotencja: jeśli już jest "disabled" (czyli przywrócony z archiwum), to OK.
+    if str(user.status) == "disabled":
         return StaffAccessResult(
             status="ok",
             staff_id=int(user.id),
@@ -258,10 +268,25 @@ def unarchive_staff_user(
             token_version=int(user.token_version),
         )
 
-    user.status = "active"
+    # Nie ma sensu "unarchive" aktywnego — to oznacza, że coś wcześniej wpuściło go do active.
+    if str(user.status) == "active":
+        return StaffAccessResult(
+            status="ok",
+            staff_id=int(user.id),
+            username=user.username,
+            new_status=str(user.status),
+            token_version=int(user.token_version),
+        )
+
+    if str(user.status) != "archived":
+        raise StaffAccessError("Pracownik nie jest w archiwum.")
+
+    # Wymaganie biznesowe: z archiwum wracamy do "disabled" (nadal bez logowania).
+    user.status = "disabled"
     user.archived_at = None
     user.archived_reason = None
     user.archived_by_staff_user_id = None
+    user.token_version = int(user.token_version) + 1  # safety: invalidate any edge-case tokens
     user.updated_at = _utcnow()
 
     after = {"status": str(user.status), "token_version": int(user.token_version)}
@@ -319,6 +344,14 @@ def enable_staff_user(
             new_status=str(user.status),
             token_version=int(user.token_version),
         )
+
+    # Nie odblokowujemy archiwum bezpośrednio.
+    if str(user.status) == "archived":
+        raise StaffAccessError("Nie można odblokować pracownika w archiwum. Najpierw przywróć z archiwum.")
+
+    # Odblokować można tylko zablokowanego.
+    if str(user.status) != "disabled":
+        raise StaffAccessError("Odblokować można tylko pracownika zablokowanego (status=disabled).")
 
     user.status = "active"
     user.updated_at = _utcnow()
