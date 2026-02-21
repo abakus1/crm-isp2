@@ -52,6 +52,8 @@ class StaffAddressPrg(BaseModel):
     ulic: Optional[str] = None
     building_no: Optional[str] = None
     local_no: Optional[str] = None
+    postal_code: Optional[str] = None
+    post_city: Optional[str] = None
 
 
 class StaffCreateIn(BaseModel):
@@ -135,6 +137,8 @@ class StaffOut(BaseModel):
             ulic=getattr(u, "address_registered_prg_ulic", None),
             building_no=getattr(u, "address_registered_prg_building_no", None),
             local_no=getattr(u, "address_registered_prg_local_no", None),
+            postal_code=getattr(u, "address_registered_postal_code", None),
+            post_city=getattr(u, "address_registered_post_city", None),
         )
 
         cur_prg = StaffAddressPrg(
@@ -145,6 +149,8 @@ class StaffOut(BaseModel):
             ulic=getattr(u, "address_current_prg_ulic", None),
             building_no=getattr(u, "address_current_prg_building_no", None),
             local_no=getattr(u, "address_current_prg_local_no", None),
+            postal_code=getattr(u, "address_current_postal_code", None),
+            post_city=getattr(u, "address_current_post_city", None),
         )
 
         def _is_empty(x: StaffAddressPrg) -> bool:
@@ -157,6 +163,8 @@ class StaffOut(BaseModel):
                     x.ulic,
                     x.building_no,
                     x.local_no,
+                    x.postal_code,
+                    x.post_city,
                 ]
             )
 

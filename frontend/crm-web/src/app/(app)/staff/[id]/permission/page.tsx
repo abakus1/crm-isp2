@@ -18,7 +18,11 @@ type StaffAddressPrg = {
   street_name: string;
   ulic: string;
   building_no: string;
+
+  // ✅ nowe, opcjonalne
   local_no?: string | null;
+  postal_code?: string | null;
+  post_city?: string | null;
 };
 
 type StaffOut = {
@@ -67,24 +71,39 @@ type ResolvedAction = {
 type OverrideEffect = "allow" | "deny" | null;
 
 function Pill({ tone, text }: { tone: "ok" | "warn" | "muted"; text: string }) {
-  const base = "inline-flex items-center rounded-md border border-border px-2 py-0.5 text-[11px] leading-4";
+  const base =
+    "inline-flex items-center rounded-md border border-border px-2 py-0.5 text-[11px] leading-4";
   const cls =
-    tone === "ok" ? "bg-emerald-500/10" : tone === "warn" ? "bg-amber-500/10" : "bg-muted/40";
+    tone === "ok"
+      ? "bg-emerald-500/10"
+      : tone === "warn"
+      ? "bg-amber-500/10"
+      : "bg-muted/40";
   return <span className={`${base} ${cls}`}>{text}</span>;
 }
 
 function formatPrgAddress(prg: StaffAddressPrg | null | undefined) {
   if (!prg) return "";
+
+  const place = (prg.place_name || "").trim();
+  const street = (prg.street_name || "").trim();
+  const bno = (prg.building_no || "").trim();
+  const lno = (prg.local_no || "").trim();
+  const pc = (prg.postal_code || "").trim();
+  const postCity = (prg.post_city || "").trim();
+
   const parts: string[] = [];
-  if (prg.place_name) parts.push(prg.place_name);
 
-  const streetAndNo = [prg.street_name, prg.building_no].filter(Boolean).join(" ");
-  if (streetAndNo) parts.push(streetAndNo);
+  const line1 = [place, street].filter(Boolean).join(", ").trim();
+  if (line1) parts.push(line1);
 
-  if (prg.local_no) parts.push(`lok. ${prg.local_no}`);
+  const line2 = [bno ? `${bno}` : null, lno ? `lok. ${lno}` : null].filter(Boolean).join(" ");
+  if (line2) parts.push(line2);
 
-  const s = parts.join(", ").trim();
-  return s || "";
+  const line3 = [pc, postCity].filter(Boolean).join(" ").trim();
+  if (line3) parts.push(line3);
+
+  return parts.join(", ").trim();
 }
 
 function pickToPrg(p: PrgAddressPick): StaffAddressPrg {
@@ -96,6 +115,8 @@ function pickToPrg(p: PrgAddressPick): StaffAddressPrg {
     ulic: p.ulic,
     building_no: p.building_no,
     local_no: null,
+    postal_code: null,
+    post_city: null,
   };
 }
 
@@ -122,6 +143,7 @@ export default function StaffManagePage() {
   // profile modal
   const [openProfile, setOpenProfile] = useState(false);
   const [profileTab, setProfileTab] = useState<"basic" | "reg" | "cur">("basic");
+
   const [pFirst, setPFirst] = useState("");
   const [pLast, setPLast] = useState("");
   const [pEmail, setPEmail] = useState("");
@@ -135,7 +157,11 @@ export default function StaffManagePage() {
   const [pAddrReg, setPAddrReg] = useState("");
   const [pAddrCur, setPAddrCur] = useState("");
 
-  // PRG structured (finder)
+  // czy legacy jest "auto" (z PRG) — jeśli user ręcznie edytował, nie nadpisujemy
+  const [regLegacyAuto, setRegLegacyAuto] = useState(true);
+  const [curLegacyAuto, setCurLegacyAuto] = useState(true);
+
+  // PRG structured (finder + fields)
   const [pAddrRegPrg, setPAddrRegPrg] = useState<StaffAddressPrg | null>(null);
   const [pAddrCurPrg, setPAddrCurPrg] = useState<StaffAddressPrg | null>(null);
 
@@ -146,6 +172,9 @@ export default function StaffManagePage() {
   const [q, setQ] = useState("");
   const [overrides, setOverrides] = useState<Record<string, OverrideEffect>>({});
   const [originalOverrides, setOriginalOverrides] = useState<Record<string, OverrideEffect>>({});
+
+  // UI: permissions collapsed by default (to avoid clutter)
+  const [showPermissions, setShowPermissions] = useState(false);
 
   function handleUnauthorized() {
     logout();
@@ -159,7 +188,61 @@ export default function StaffManagePage() {
   const canPermRead = perms.has("staff.permissions.read");
   const canPermWrite = perms.has("staff.permissions.write");
 
-  const canUsePage = canReadStaff && (canUpdateProfile || canSetRole || canPermRead || canPermWrite);
+  const canUsePage =
+    canReadStaff && (canUpdateProfile || canSetRole || canPermRead || canPermWrite);
+
+  function TabButton({
+    active,
+    children,
+    onClick,
+  }: {
+    active: boolean;
+    children: ReactNode;
+    onClick: () => void;
+  }) {
+    return (
+      <button
+        type="button"
+        onClick={onClick}
+        className={[
+          "h-9 rounded-md border px-3 text-sm",
+          active
+            ? "border-border bg-background"
+            : "border-transparent bg-muted/40 hover:bg-muted/60",
+        ].join(" ")}
+      >
+        {children}
+      </button>
+    );
+  }
+
+  function syncLegacyIfAuto(which: "reg" | "cur", prg: StaffAddressPrg | null) {
+    const formatted = formatPrgAddress(prg);
+    if (which === "reg") {
+      if (regLegacyAuto) setPAddrReg(formatted);
+    } else {
+      if (curLegacyAuto) setPAddrCur(formatted);
+    }
+  }
+
+  function updateRegPrg(patch: Partial<StaffAddressPrg>) {
+    setPAddrRegPrg((prev) => {
+      const next = { ...(prev || ({} as StaffAddressPrg)), ...patch } as StaffAddressPrg;
+      // jeśli nie mamy podstaw, nie syncujemy
+      if (!next.place_name || !next.street_name || !next.building_no) return next;
+      syncLegacyIfAuto("reg", next);
+      return next;
+    });
+  }
+
+  function updateCurPrg(patch: Partial<StaffAddressPrg>) {
+    setPAddrCurPrg((prev) => {
+      const next = { ...(prev || ({} as StaffAddressPrg)), ...patch } as StaffAddressPrg;
+      if (!next.place_name || !next.street_name || !next.building_no) return next;
+      syncLegacyIfAuto("cur", next);
+      return next;
+    });
+  }
 
   async function loadAll() {
     if (!token || !Number.isFinite(staffId)) return;
@@ -232,44 +315,24 @@ export default function StaffManagePage() {
     setPPesel(u.pesel || "");
     setPDoc(u.id_document_no || "");
 
-    // PRG first
     const regPrg = u.address_registered_prg || null;
     const curPrg = u.address_current_prg || null;
+
     setPAddrRegPrg(regPrg);
     setPAddrCurPrg(curPrg);
 
-    // legacy (best effort)
+    // legacy: jak mamy z backendu, traktujemy jako “ustawione”
     setPAddrReg(u.address_registered || formatPrgAddress(regPrg) || "");
     setPAddrCur(u.address_current || formatPrgAddress(curPrg) || "");
+
+    // jeśli backend zwrócił address_registered/address_current -> traktujemy jako manual (nie nadpisujemy automatem)
+    setRegLegacyAuto(!(u.address_registered && u.address_registered.trim().length > 0) ? true : false);
+    setCurLegacyAuto(!(u.address_current && u.address_current.trim().length > 0) ? true : false);
 
     setPAddrSame(!!u.address_current_same_as_registered);
     setPMfaReq(!!u.mfa_required);
 
-    // default tab
     setProfileTab("basic");
-  }
-
-  function TabButton({
-    active,
-    children,
-    onClick,
-  }: {
-    active: boolean;
-    children: ReactNode;
-    onClick: () => void;
-  }) {
-    return (
-      <button
-        type="button"
-        onClick={onClick}
-        className={[
-          "h-9 rounded-md border px-3 text-sm",
-          active ? "border-border bg-background" : "border-transparent bg-muted/40 hover:bg-muted/60",
-        ].join(" ")}
-      >
-        {children}
-      </button>
-    );
   }
 
   useEffect(() => {
@@ -372,10 +435,10 @@ export default function StaffManagePage() {
       });
 
       setStaff(out);
-      setOk("Profil zapisany ✅");
       setOpenProfile(false);
 
-      await loadAll();
+      // ✅ po zapisie wracamy do kartoteki
+      router.push(`/staff/${staff.id}`);
     } catch (e: any) {
       const err = e as ApiError;
       setError(err.message || "Błąd zapisu profilu");
@@ -445,7 +508,9 @@ export default function StaffManagePage() {
     <div className="space-y-4">
       <div className="flex items-start justify-between gap-3">
         <div>
-          <div className="text-sm font-semibold">Zarządzaj: {staff?.username ?? `#${staffId}`}</div>
+          <div className="text-sm font-semibold">
+            Zarządzaj: {staff?.username ?? `#${staffId}`}
+          </div>
           <div className="text-xs text-muted-foreground">
             Edycja profilu, roli i uprawnień indywidualnych. Pracownik nie ma tu wstępu.
           </div>
@@ -526,100 +591,133 @@ export default function StaffManagePage() {
                 Zmień rolę
               </button>
             )}
-          </div>
-        </div>
-      </div>
 
-      {/* Permissions */}
-      <div className="rounded-xl border border-border bg-card">
-        <div className="flex items-center justify-between p-4 border-b border-border">
-          <div>
-            <div className="text-sm font-medium">Uprawnienia (rola + override)</div>
-            <div className="text-xs text-muted-foreground">
-              Kolejność: deny override → allow override → rola → brak.
-            </div>
-          </div>
-          <div className="flex items-center gap-2">
-            <input
-              value={q}
-              onChange={(e) => setQ(e.target.value)}
-              placeholder="Szukaj…"
-              className="h-9 w-48 rounded-md border border-border bg-background px-3 text-sm"
-            />
-            {canPermWrite && (
+            {/* Permissions toggle */}
+            {canPermRead && (
               <button
-                onClick={() => saveOverrides()}
-                disabled={saving || busy || !dirtyOverrides}
+                type="button"
+                onClick={() => setShowPermissions((v) => !v)}
+                disabled={busy || saving}
                 className="rounded-md border border-border px-3 py-2 text-sm hover:bg-muted/60 disabled:opacity-60"
+                title="Pokaż/ukryj uprawnienia indywidualne"
               >
-                {saving ? "Zapisuję…" : "Zapisz"}
+                {showPermissions ? "Ukryj uprawnienia" : "Uprawnienia"}
+                {dirtyOverrides ? " *" : ""}
               </button>
             )}
           </div>
         </div>
-
-        <div className="p-4">
-          {!canPermRead ? (
-            <div className="text-xs text-muted-foreground">Brak uprawnienia: staff.permissions.read</div>
-          ) : resolved.length === 0 ? (
-            <div className="text-xs text-muted-foreground">Brak danych.</div>
-          ) : (
-            <div className="overflow-x-auto">
-              <table className="min-w-[900px] w-full text-sm">
-                <thead>
-                  <tr className="text-left text-xs text-muted-foreground border-b border-border">
-                    <th className="py-2 pr-3">Kod</th>
-                    <th className="py-2 pr-3">Nazwa</th>
-                    <th className="py-2 pr-3">Status</th>
-                    <th className="py-2 pr-3">Źródło</th>
-                    <th className="py-2 pr-3">Override</th>
-                    {canPermWrite && <th className="py-2 pr-3">Zmień</th>}
-                  </tr>
-                </thead>
-                <tbody>
-                  {filtered.map((a) => {
-                    const ov = overrides[a.code] ?? null;
-                    return (
-                      <tr key={a.code} className="border-b border-border last:border-b-0">
-                        <td className="py-2 pr-3 font-mono text-xs">{a.code}</td>
-                        <td className="py-2 pr-3">
-                          <div className="text-sm">{a.label_pl}</div>
-                          <div className="text-xs text-muted-foreground">{a.description_pl}</div>
-                        </td>
-                        <td className="py-2 pr-3">
-                          {a.allowed ? <Pill tone="ok" text="allow" /> : <Pill tone="muted" text="deny" />}
-                        </td>
-                        <td className="py-2 pr-3">
-                          <span className="text-xs text-muted-foreground">{a.source}</span>
-                        </td>
-                        <td className="py-2 pr-3">
-                          <span className="text-xs">{a.override ?? "-"}</span>
-                        </td>
-                        {canPermWrite && (
-                          <td className="py-2 pr-3">
-                            <select
-                              value={ov ?? "inherit"}
-                              onChange={(e) => {
-                                const v = e.target.value;
-                                setOverride(a.code, v === "inherit" ? null : (v as OverrideEffect));
-                              }}
-                              className="h-9 rounded-md border border-border bg-background px-2 text-sm"
-                            >
-                              <option value="inherit">inherit</option>
-                              <option value="allow">allow</option>
-                              <option value="deny">deny</option>
-                            </select>
-                          </td>
-                        )}
-                      </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
-            </div>
-          )}
-        </div>
       </div>
+
+      {/* Permissions (collapsible) */}
+      {showPermissions && (
+        <div className="rounded-xl border border-border bg-card">
+          <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-3 p-4 border-b border-border">
+            <div>
+              <div className="text-sm font-medium">Uprawnienia (rola + override)</div>
+              <div className="text-xs text-muted-foreground">
+                Kolejność: deny override → allow override → rola → brak.
+              </div>
+            </div>
+            <div className="flex flex-wrap items-center gap-2">
+              <input
+                value={q}
+                onChange={(e) => setQ(e.target.value)}
+                placeholder="Szukaj…"
+                className="h-9 w-56 rounded-md border border-border bg-background px-3 text-sm"
+              />
+              {canPermWrite && (
+                <button
+                  onClick={() => saveOverrides()}
+                  disabled={saving || busy || !dirtyOverrides}
+                  className="rounded-md border border-border px-3 py-2 text-sm hover:bg-muted/60 disabled:opacity-60"
+                >
+                  {saving ? "Zapisuję…" : "Zapisz"}
+                </button>
+              )}
+              <button
+                type="button"
+                onClick={() => setShowPermissions(false)}
+                disabled={busy || saving}
+                className="rounded-md border border-border px-3 py-2 text-sm hover:bg-muted/60 disabled:opacity-60"
+              >
+                Zamknij
+              </button>
+            </div>
+          </div>
+
+          <div className="p-4">
+            {!canPermRead ? (
+              <div className="text-xs text-muted-foreground">
+                Brak uprawnienia: staff.permissions.read
+              </div>
+            ) : resolved.length === 0 ? (
+              <div className="text-xs text-muted-foreground">Brak danych.</div>
+            ) : (
+              <div className="overflow-x-auto">
+                <table className="min-w-[900px] w-full text-sm">
+                  <thead>
+                    <tr className="text-left text-xs text-muted-foreground border-b border-border">
+                      <th className="py-2 pr-3">Kod</th>
+                      <th className="py-2 pr-3">Nazwa</th>
+                      <th className="py-2 pr-3">Status</th>
+                      <th className="py-2 pr-3">Źródło</th>
+                      <th className="py-2 pr-3">Override</th>
+                      {canPermWrite && <th className="py-2 pr-3">Zmień</th>}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {filtered.map((a) => {
+                      const ov = overrides[a.code] ?? null;
+                      return (
+                        <tr key={a.code} className="border-b border-border last:border-b-0">
+                          <td className="py-2 pr-3 font-mono text-xs">{a.code}</td>
+                          <td className="py-2 pr-3">
+                            <div className="text-sm">{a.label_pl}</div>
+                            <div className="text-xs text-muted-foreground">{a.description_pl}</div>
+                          </td>
+                          <td className="py-2 pr-3">
+                            {a.allowed ? (
+                              <Pill tone="ok" text="allow" />
+                            ) : (
+                              <Pill tone="muted" text="deny" />
+                            )}
+                          </td>
+                          <td className="py-2 pr-3">
+                            <span className="text-xs text-muted-foreground">{a.source}</span>
+                          </td>
+                          <td className="py-2 pr-3">
+                            <span className="text-xs">{a.override ?? "-"}</span>
+                          </td>
+                          {canPermWrite && (
+                            <td className="py-2 pr-3">
+                              <select
+                                value={ov ?? "inherit"}
+                                onChange={(e) => {
+                                  const v = e.target.value;
+                                  setOverride(
+                                    a.code,
+                                    v === "inherit" ? null : (v as OverrideEffect)
+                                  );
+                                }}
+                                className="h-9 rounded-md border border-border bg-background px-2 text-sm"
+                              >
+                                <option value="inherit">inherit</option>
+                                <option value="allow">allow</option>
+                                <option value="deny">deny</option>
+                              </select>
+                            </td>
+                          )}
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
 
       {/* Role modal */}
       <SimpleModal
@@ -691,7 +789,6 @@ export default function StaffManagePage() {
       <SimpleModal
         open={openProfile}
         title="Edytuj profil pracownika"
-        // modal_staff: duży, nieprzezroczysty, ~20% margines od krawędzi (60vw/60vh)
         className="w-[min(60vw,1100px)] h-[min(60vh,820px)] max-w-none"
         bodyClassName="p-0"
         headerExtra={
@@ -712,9 +809,7 @@ export default function StaffManagePage() {
           setOpenProfile(false);
         }}
       >
-        {/* modal_staff body */}
-        <div className="flex h-full flex-col bg-card">
-          {/* content */}
+        <div className="flex h-full flex-col bg-background">
           <div className="flex-1 overflow-y-auto p-4">
             {profileTab === "basic" ? (
               <div className="space-y-5">
@@ -795,7 +890,11 @@ export default function StaffManagePage() {
 
                 <div className="text-xs font-semibold">Bezpieczeństwo</div>
                 <label className="flex items-center gap-2 text-sm">
-                  <input type="checkbox" checked={pMfaReq} onChange={(e) => setPMfaReq(e.target.checked)} />
+                  <input
+                    type="checkbox"
+                    checked={pMfaReq}
+                    onChange={(e) => setPMfaReq(e.target.checked)}
+                  />
                   <span>Wymagane MFA (TOTP)</span>
                 </label>
               </div>
@@ -804,8 +903,9 @@ export default function StaffManagePage() {
             {profileTab === "reg" ? (
               <div className="space-y-4">
                 <div className="text-xs font-semibold">Adres zameldowania (PRG/ADRUNI)</div>
-                <div className="rounded-lg border border-border bg-background/50 p-3 text-xs text-muted-foreground">
-                  Wskazówka: wybór z PRG zapisze też „tekst / legacy”, żeby nie rozwalić zgodności wstecz.
+                <div className="rounded-lg border border-border bg-muted/20 p-3 text-xs text-muted-foreground">
+                  Wskazówka: wybór z PRG zapisze też „tekst / legacy” (jeśli go nie edytujesz ręcznie),
+                  żeby zachować zgodność wstecz.
                 </div>
 
                 <PrgAddressFinder
@@ -815,20 +915,59 @@ export default function StaffManagePage() {
                   onPick={(picked) => {
                     const prg = pickToPrg(picked);
                     setPAddrRegPrg(prg);
+                    setRegLegacyAuto(true);
                     setPAddrReg(formatPrgAddress(prg));
 
                     if (pAddrSame) {
                       setPAddrCurPrg(null);
                       setPAddrCur("");
+                      setCurLegacyAuto(true);
                     }
                   }}
                 />
+
+                {/* ✅ nowe pola */}
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+                  <label className="space-y-1">
+                    <div className="text-xs text-muted-foreground">Lokal (opcjonalnie)</div>
+                    <input
+                      value={pAddrRegPrg?.local_no || ""}
+                      onChange={(e) => updateRegPrg({ local_no: e.target.value || null })}
+                      className="h-10 w-full rounded-md border border-border bg-background px-3 text-sm"
+                      placeholder="np. 12"
+                      disabled={!pAddrRegPrg}
+                    />
+                  </label>
+                  <label className="space-y-1">
+                    <div className="text-xs text-muted-foreground">Kod pocztowy (opcjonalnie)</div>
+                    <input
+                      value={pAddrRegPrg?.postal_code || ""}
+                      onChange={(e) => updateRegPrg({ postal_code: e.target.value || null })}
+                      className="h-10 w-full rounded-md border border-border bg-background px-3 text-sm"
+                      placeholder="np. 30-001"
+                      disabled={!pAddrRegPrg}
+                    />
+                  </label>
+                  <label className="space-y-1">
+                    <div className="text-xs text-muted-foreground">Miasto (poczta) (opcjonalnie)</div>
+                    <input
+                      value={pAddrRegPrg?.post_city || ""}
+                      onChange={(e) => updateRegPrg({ post_city: e.target.value || null })}
+                      className="h-10 w-full rounded-md border border-border bg-background px-3 text-sm"
+                      placeholder="np. Kraków"
+                      disabled={!pAddrRegPrg}
+                    />
+                  </label>
+                </div>
 
                 <label className="space-y-1 block">
                   <div className="text-xs text-muted-foreground">Adres zameldowania (tekst / legacy)</div>
                   <textarea
                     value={pAddrReg}
-                    onChange={(e) => setPAddrReg(e.target.value)}
+                    onChange={(e) => {
+                      setRegLegacyAuto(false);
+                      setPAddrReg(e.target.value);
+                    }}
                     className="min-h-[92px] w-full rounded-md border border-border bg-background px-3 py-2 text-sm"
                   />
                 </label>
@@ -843,6 +982,7 @@ export default function StaffManagePage() {
                       if (checked) {
                         setPAddrCur("");
                         setPAddrCurPrg(null);
+                        setCurLegacyAuto(true);
                       }
                     }}
                   />
@@ -856,7 +996,7 @@ export default function StaffManagePage() {
                 <div className="text-xs font-semibold">Adres zamieszkania (PRG/ADRUNI)</div>
 
                 {pAddrSame ? (
-                  <div className="rounded-lg border border-border bg-background/50 p-3 text-sm">
+                  <div className="rounded-lg border border-border bg-muted/20 p-3 text-sm">
                     <div className="text-xs text-muted-foreground">Status</div>
                     <div className="text-sm">Taki sam jak adres zameldowania.</div>
                     <div className="text-xs text-muted-foreground mt-2">
@@ -872,15 +1012,53 @@ export default function StaffManagePage() {
                       onPick={(picked) => {
                         const prg = pickToPrg(picked);
                         setPAddrCurPrg(prg);
+                        setCurLegacyAuto(true);
                         setPAddrCur(formatPrgAddress(prg));
                       }}
                     />
+
+                    {/* ✅ nowe pola */}
+                    <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+                      <label className="space-y-1">
+                        <div className="text-xs text-muted-foreground">Lokal (opcjonalnie)</div>
+                        <input
+                          value={pAddrCurPrg?.local_no || ""}
+                          onChange={(e) => updateCurPrg({ local_no: e.target.value || null })}
+                          className="h-10 w-full rounded-md border border-border bg-background px-3 text-sm"
+                          placeholder="np. 12"
+                          disabled={!pAddrCurPrg}
+                        />
+                      </label>
+                      <label className="space-y-1">
+                        <div className="text-xs text-muted-foreground">Kod pocztowy (opcjonalnie)</div>
+                        <input
+                          value={pAddrCurPrg?.postal_code || ""}
+                          onChange={(e) => updateCurPrg({ postal_code: e.target.value || null })}
+                          className="h-10 w-full rounded-md border border-border bg-background px-3 text-sm"
+                          placeholder="np. 30-001"
+                          disabled={!pAddrCurPrg}
+                        />
+                      </label>
+                      <label className="space-y-1">
+                        <div className="text-xs text-muted-foreground">Miasto (poczta) (opcjonalnie)</div>
+                        <input
+                          value={pAddrCurPrg?.post_city || ""}
+                          onChange={(e) => updateCurPrg({ post_city: e.target.value || null })}
+                          className="h-10 w-full rounded-md border border-border bg-background px-3 text-sm"
+                          placeholder="np. Kraków"
+                          disabled={!pAddrCurPrg}
+                        />
+                      </label>
+                    </div>
 
                     <label className="space-y-1 block">
                       <div className="text-xs text-muted-foreground">Adres zamieszkania (tekst / legacy)</div>
                       <textarea
                         value={pAddrCur}
-                        onChange={(e) => setPAddrCur(e.target.value)}
+                        onChange={(e) => {
+                          setCurLegacyAuto(false);
+                          setPAddrCur(e.target.value);
+                        }}
                         className="min-h-[92px] w-full rounded-md border border-border bg-background px-3 py-2 text-sm"
                       />
                     </label>
@@ -890,8 +1068,7 @@ export default function StaffManagePage() {
             ) : null}
           </div>
 
-          {/* footer */}
-          <div className="border-t border-border p-4 flex items-center justify-end gap-2 bg-muted/20">
+          <div className="border-t border-border p-4 flex items-center justify-end gap-2 bg-muted/10">
             <button
               onClick={() => setOpenProfile(false)}
               disabled={saving}

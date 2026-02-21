@@ -216,6 +216,9 @@ def _apply_prg_address_patch(
     building_no = _prg_norm_code(prg.get("building_no"), max_len=32)
     local_no = _prg_norm_code(prg.get("local_no"), max_len=32)
 
+    postal_code = _prg_norm_code(prg.get("postal_code"), max_len=16)
+    post_city = _prg_norm_text(prg.get("post_city"))
+
     setattr(target, f"{field_prefix}_prg_place_name", place_name)
     setattr(target, f"{field_prefix}_prg_terc", terc)
     setattr(target, f"{field_prefix}_prg_simc", simc)
@@ -223,6 +226,9 @@ def _apply_prg_address_patch(
     setattr(target, f"{field_prefix}_prg_ulic", ulic)
     setattr(target, f"{field_prefix}_prg_building_no", building_no)
     setattr(target, f"{field_prefix}_prg_local_no", local_no)
+
+    setattr(target, f"{field_prefix}_postal_code", postal_code)
+    setattr(target, f"{field_prefix}_post_city", post_city)
 
 
 def _format_legacy_address_from_prg(prg: dict) -> Optional[str]:
@@ -236,6 +242,8 @@ def _format_legacy_address_from_prg(prg: dict) -> Optional[str]:
     street = _prg_norm_text(prg.get("street_name"))
     building = _prg_norm_text(prg.get("building_no"))
     local = _prg_norm_text(prg.get("local_no"))
+    postal_code = _prg_norm_text(prg.get("postal_code"))
+    post_city = _prg_norm_text(prg.get("post_city"))
 
     parts = []
     if place:
@@ -254,6 +262,11 @@ def _format_legacy_address_from_prg(prg: dict) -> Optional[str]:
 
     if local:
         parts.append(f"lok. {local}")
+
+    # Poczta bywa inna niż miejscowość — trzymamy to jawnie
+    pc = " ".join([x for x in [postal_code, post_city] if x]).strip()
+    if pc:
+        parts.append(pc)
 
     s = ", ".join(parts).strip()
     return s or None
@@ -526,6 +539,8 @@ def update_staff_profile(
             "ulic": getattr(target, "address_registered_prg_ulic", None),
             "building_no": getattr(target, "address_registered_prg_building_no", None),
             "local_no": getattr(target, "address_registered_prg_local_no", None),
+            "postal_code": getattr(target, "address_registered_postal_code", None),
+            "post_city": getattr(target, "address_registered_post_city", None),
         },
         "address_current_prg": {
             "place_name": getattr(target, "address_current_prg_place_name", None),
@@ -535,6 +550,8 @@ def update_staff_profile(
             "ulic": getattr(target, "address_current_prg_ulic", None),
             "building_no": getattr(target, "address_current_prg_building_no", None),
             "local_no": getattr(target, "address_current_prg_local_no", None),
+            "postal_code": getattr(target, "address_current_postal_code", None),
+            "post_city": getattr(target, "address_current_post_city", None),
         },
     }
 
@@ -621,6 +638,10 @@ def update_staff_profile(
         setattr(target, "address_current_prg_building_no", getattr(target, "address_registered_prg_building_no", None))
         setattr(target, "address_current_prg_local_no", getattr(target, "address_registered_prg_local_no", None))
 
+        # Poczta
+        setattr(target, "address_current_postal_code", getattr(target, "address_registered_postal_code", None))
+        setattr(target, "address_current_post_city", getattr(target, "address_registered_post_city", None))
+
     # PRG dict-y nie są polami modelu -> usuwamy z patch zanim zrobimy setattr loop
     patch.pop("address_registered_prg", None)
     patch.pop("address_current_prg", None)
@@ -653,6 +674,8 @@ def update_staff_profile(
             "ulic": getattr(target, "address_registered_prg_ulic", None),
             "building_no": getattr(target, "address_registered_prg_building_no", None),
             "local_no": getattr(target, "address_registered_prg_local_no", None),
+            "postal_code": getattr(target, "address_registered_postal_code", None),
+            "post_city": getattr(target, "address_registered_post_city", None),
         },
         "address_current_prg": {
             "place_name": getattr(target, "address_current_prg_place_name", None),
@@ -662,6 +685,8 @@ def update_staff_profile(
             "ulic": getattr(target, "address_current_prg_ulic", None),
             "building_no": getattr(target, "address_current_prg_building_no", None),
             "local_no": getattr(target, "address_current_prg_local_no", None),
+            "postal_code": getattr(target, "address_current_postal_code", None),
+            "post_city": getattr(target, "address_current_post_city", None),
         },
     }
 

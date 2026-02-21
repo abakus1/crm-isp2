@@ -92,6 +92,10 @@ class StaffUser(Base):
     address_registered_prg_building_no: Mapped[Optional[str]] = mapped_column(sa.String(32), nullable=True)
     address_registered_prg_local_no: Mapped[Optional[str]] = mapped_column(sa.String(32), nullable=True)
 
+    # Poczta (nie zawsze pokrywa się z nazwą miejscowości)
+    address_registered_postal_code: Mapped[Optional[str]] = mapped_column(sa.String(16), nullable=True)
+    address_registered_post_city: Mapped[Optional[str]] = mapped_column(sa.Text, nullable=True)
+
     # --- Zamieszkanie ---
     address_current_prg_place_name: Mapped[Optional[str]] = mapped_column(sa.Text, nullable=True)
     address_current_prg_terc: Mapped[Optional[str]] = mapped_column(sa.String(8), nullable=True)
@@ -100,6 +104,10 @@ class StaffUser(Base):
     address_current_prg_ulic: Mapped[Optional[str]] = mapped_column(sa.String(8), nullable=True)
     address_current_prg_building_no: Mapped[Optional[str]] = mapped_column(sa.String(32), nullable=True)
     address_current_prg_local_no: Mapped[Optional[str]] = mapped_column(sa.String(32), nullable=True)
+
+    # Poczta (nie zawsze pokrywa się z nazwą miejscowości)
+    address_current_postal_code: Mapped[Optional[str]] = mapped_column(sa.String(16), nullable=True)
+    address_current_post_city: Mapped[Optional[str]] = mapped_column(sa.Text, nullable=True)
 
     address_current_same_as_registered: Mapped[bool] = mapped_column(
         sa.Boolean,
