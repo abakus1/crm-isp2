@@ -370,3 +370,22 @@ input, select, textarea {
 .ui-shadow {
   box-shadow: var(--shadow-md);
 }
+
+/* =========================================================
+   GLOBAL MODAL FIX – ALWAYS SOLID
+   ========================================================= */
+
+.modal-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(15, 23, 42, 0.55); /* ciemne neutralne przyciemnienie */
+  backdrop-filter: none;              /* wyłącz blur jeśli gdzieś był */
+  z-index: 1000;
+}
+
+.modal-surface {
+  background: rgb(var(--surface)) !important;
+  opacity: 1 !important;
+  isolation: isolate; /* odcina wpływ tła */
+  z-index: 1001;
+}

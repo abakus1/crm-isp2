@@ -1,7 +1,8 @@
+// frontend/crm-web/src/app/(app)/staff/[id]/permission/page.tsx
 "use client";
 
 import Link from "next/link";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { useParams, useRouter } from "next/navigation";
 
 import { apiFetch, ApiError } from "@/lib/api";
@@ -120,6 +121,7 @@ export default function StaffManagePage() {
 
   // profile modal
   const [openProfile, setOpenProfile] = useState(false);
+  const [profileTab, setProfileTab] = useState<"basic" | "reg" | "cur">("basic");
   const [pFirst, setPFirst] = useState("");
   const [pLast, setPLast] = useState("");
   const [pEmail, setPEmail] = useState("");
@@ -242,6 +244,32 @@ export default function StaffManagePage() {
 
     setPAddrSame(!!u.address_current_same_as_registered);
     setPMfaReq(!!u.mfa_required);
+
+    // default tab
+    setProfileTab("basic");
+  }
+
+  function TabButton({
+    active,
+    children,
+    onClick,
+  }: {
+    active: boolean;
+    children: ReactNode;
+    onClick: () => void;
+  }) {
+    return (
+      <button
+        type="button"
+        onClick={onClick}
+        className={[
+          "h-9 rounded-md border px-3 text-sm",
+          active ? "border-border bg-background" : "border-transparent bg-muted/40 hover:bg-muted/60",
+        ].join(" ")}
+      >
+        {children}
+      </button>
+    );
   }
 
   useEffect(() => {
@@ -663,171 +691,207 @@ export default function StaffManagePage() {
       <SimpleModal
         open={openProfile}
         title="Edytuj profil pracownika"
-        // tu sztuczka: większy, nieprzezroczysty modal "wide"
-        className="max-w-5xl w-[min(92vw,1100px)]"
+        // modal_staff: duży, nieprzezroczysty, ~20% margines od krawędzi (60vw/60vh)
+        className="w-[min(60vw,1100px)] h-[min(60vh,820px)] max-w-none"
+        bodyClassName="p-0"
+        headerExtra={
+          <div className="flex flex-wrap gap-2">
+            <TabButton active={profileTab === "basic"} onClick={() => setProfileTab("basic")}>
+              Dane podstawowe
+            </TabButton>
+            <TabButton active={profileTab === "reg"} onClick={() => setProfileTab("reg")}>
+              Adres zameldowania
+            </TabButton>
+            <TabButton active={profileTab === "cur"} onClick={() => setProfileTab("cur")}>
+              Adres zamieszkania
+            </TabButton>
+          </div>
+        }
         onClose={() => {
           if (saving) return;
           setOpenProfile(false);
         }}
       >
-        <div className="rounded-xl border border-border bg-card p-4 shadow-sm">
-          <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-            {/* LEFT */}
-            <div className="space-y-4">
-              <div className="text-xs font-semibold">Dane podstawowe</div>
+        {/* modal_staff body */}
+        <div className="flex h-full flex-col bg-card">
+          {/* content */}
+          <div className="flex-1 overflow-y-auto p-4">
+            {profileTab === "basic" ? (
+              <div className="space-y-5">
+                <div className="text-xs font-semibold">Dane podstawowe</div>
 
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                <label className="space-y-1">
-                  <div className="text-xs text-muted-foreground">Imię</div>
-                  <input
-                    value={pFirst}
-                    onChange={(e) => setPFirst(e.target.value)}
-                    className="h-10 w-full rounded-md border border-border bg-background px-3 text-sm"
-                  />
-                </label>
-                <label className="space-y-1">
-                  <div className="text-xs text-muted-foreground">Nazwisko</div>
-                  <input
-                    value={pLast}
-                    onChange={(e) => setPLast(e.target.value)}
-                    className="h-10 w-full rounded-md border border-border bg-background px-3 text-sm"
-                  />
-                </label>
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                  <label className="space-y-1">
+                    <div className="text-xs text-muted-foreground">Imię</div>
+                    <input
+                      value={pFirst}
+                      onChange={(e) => setPFirst(e.target.value)}
+                      className="h-10 w-full rounded-md border border-border bg-background px-3 text-sm"
+                    />
+                  </label>
+                  <label className="space-y-1">
+                    <div className="text-xs text-muted-foreground">Nazwisko</div>
+                    <input
+                      value={pLast}
+                      onChange={(e) => setPLast(e.target.value)}
+                      className="h-10 w-full rounded-md border border-border bg-background px-3 text-sm"
+                    />
+                  </label>
 
-                <label className="space-y-1 md:col-span-2">
-                  <div className="text-xs text-muted-foreground">Email</div>
-                  <input
-                    value={pEmail}
-                    onChange={(e) => setPEmail(e.target.value)}
-                    className="h-10 w-full rounded-md border border-border bg-background px-3 text-sm"
-                  />
-                </label>
+                  <label className="space-y-1 md:col-span-2">
+                    <div className="text-xs text-muted-foreground">Email</div>
+                    <input
+                      value={pEmail}
+                      onChange={(e) => setPEmail(e.target.value)}
+                      className="h-10 w-full rounded-md border border-border bg-background px-3 text-sm"
+                    />
+                  </label>
 
-                <label className="space-y-1">
-                  <div className="text-xs text-muted-foreground">Telefon firmowy</div>
-                  <input
-                    value={pPhone}
-                    onChange={(e) => setPPhone(e.target.value)}
-                    className="h-10 w-full rounded-md border border-border bg-background px-3 text-sm"
-                  />
-                </label>
-                <label className="space-y-1">
-                  <div className="text-xs text-muted-foreground">Stanowisko</div>
-                  <input
-                    value={pTitle}
-                    onChange={(e) => setPTitle(e.target.value)}
-                    className="h-10 w-full rounded-md border border-border bg-background px-3 text-sm"
-                  />
-                </label>
-              </div>
-
-              <div className="text-xs font-semibold">Dokumenty</div>
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                <label className="space-y-1">
-                  <div className="text-xs text-muted-foreground">Data urodzenia (YYYY-MM-DD)</div>
-                  <input
-                    value={pBirth}
-                    onChange={(e) => setPBirth(e.target.value)}
-                    className="h-10 w-full rounded-md border border-border bg-background px-3 text-sm"
-                  />
-                </label>
-                <label className="space-y-1">
-                  <div className="text-xs text-muted-foreground">PESEL</div>
-                  <input
-                    value={pPesel}
-                    onChange={(e) => setPPesel(e.target.value)}
-                    className="h-10 w-full rounded-md border border-border bg-background px-3 text-sm"
-                  />
-                </label>
-                <label className="space-y-1 md:col-span-2">
-                  <div className="text-xs text-muted-foreground">Dowód (seria/nr)</div>
-                  <input
-                    value={pDoc}
-                    onChange={(e) => setPDoc(e.target.value)}
-                    className="h-10 w-full rounded-md border border-border bg-background px-3 text-sm"
-                  />
-                </label>
-              </div>
-            </div>
-
-            {/* RIGHT */}
-            <div className="space-y-4">
-              <div className="text-xs font-semibold">Adresy (PRG/ADRUNI)</div>
-
-              <PrgAddressFinder
-                title="Adres zameldowania"
-                description="Wybierz lokalizację z PRG. Po wyborze uzupełnimy też pole tekstowe (legacy)."
-                disabled={saving}
-                onPick={(picked) => {
-                  const prg = pickToPrg(picked);
-                  setPAddrRegPrg(prg);
-                  setPAddrReg(formatPrgAddress(prg));
-
-                  if (pAddrSame) {
-                    setPAddrCurPrg(null);
-                    setPAddrCur("");
-                  }
-                }}
-              />
-
-              <label className="space-y-1 block">
-                <div className="text-xs text-muted-foreground">Adres zameldowania (tekst / legacy)</div>
-                <textarea
-                  value={pAddrReg}
-                  onChange={(e) => setPAddrReg(e.target.value)}
-                  className="min-h-[56px] w-full rounded-md border border-border bg-background px-3 py-2 text-sm"
-                />
-              </label>
-
-              <label className="flex items-center gap-2 text-sm">
-                <input
-                  type="checkbox"
-                  checked={pAddrSame}
-                  onChange={(e) => {
-                    const checked = e.target.checked;
-                    setPAddrSame(checked);
-                    if (checked) {
-                      setPAddrCur("");
-                      setPAddrCurPrg(null);
-                    }
-                  }}
-                />
-                <span>Adres zamieszkania taki sam jak zameldowania</span>
-              </label>
-
-              {!pAddrSame && (
-                <div className="space-y-3">
-                  <PrgAddressFinder
-                    title="Adres zamieszkania"
-                    description="Wybierz lokalizację z PRG dla adresu zamieszkania."
-                    disabled={saving}
-                    onPick={(picked) => {
-                      const prg = pickToPrg(picked);
-                      setPAddrCurPrg(prg);
-                      setPAddrCur(formatPrgAddress(prg));
-                    }}
-                  />
-
-                  <label className="space-y-1 block">
-                    <div className="text-xs text-muted-foreground">Adres zamieszkania (tekst / legacy)</div>
-                    <textarea
-                      value={pAddrCur}
-                      onChange={(e) => setPAddrCur(e.target.value)}
-                      className="min-h-[56px] w-full rounded-md border border-border bg-background px-3 py-2 text-sm"
+                  <label className="space-y-1">
+                    <div className="text-xs text-muted-foreground">Telefon firmowy</div>
+                    <input
+                      value={pPhone}
+                      onChange={(e) => setPPhone(e.target.value)}
+                      className="h-10 w-full rounded-md border border-border bg-background px-3 text-sm"
+                    />
+                  </label>
+                  <label className="space-y-1">
+                    <div className="text-xs text-muted-foreground">Stanowisko</div>
+                    <input
+                      value={pTitle}
+                      onChange={(e) => setPTitle(e.target.value)}
+                      className="h-10 w-full rounded-md border border-border bg-background px-3 text-sm"
                     />
                   </label>
                 </div>
-              )}
 
-              <div className="text-xs font-semibold">Bezpieczeństwo</div>
-              <label className="flex items-center gap-2 text-sm">
-                <input type="checkbox" checked={pMfaReq} onChange={(e) => setPMfaReq(e.target.checked)} />
-                <span>Wymagane MFA (TOTP)</span>
-              </label>
-            </div>
+                <div className="text-xs font-semibold">Dokumenty</div>
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                  <label className="space-y-1">
+                    <div className="text-xs text-muted-foreground">Data urodzenia (YYYY-MM-DD)</div>
+                    <input
+                      value={pBirth}
+                      onChange={(e) => setPBirth(e.target.value)}
+                      className="h-10 w-full rounded-md border border-border bg-background px-3 text-sm"
+                    />
+                  </label>
+                  <label className="space-y-1">
+                    <div className="text-xs text-muted-foreground">PESEL</div>
+                    <input
+                      value={pPesel}
+                      onChange={(e) => setPPesel(e.target.value)}
+                      className="h-10 w-full rounded-md border border-border bg-background px-3 text-sm"
+                    />
+                  </label>
+                  <label className="space-y-1 md:col-span-2">
+                    <div className="text-xs text-muted-foreground">Dowód (seria/nr)</div>
+                    <input
+                      value={pDoc}
+                      onChange={(e) => setPDoc(e.target.value)}
+                      className="h-10 w-full rounded-md border border-border bg-background px-3 text-sm"
+                    />
+                  </label>
+                </div>
+
+                <div className="text-xs font-semibold">Bezpieczeństwo</div>
+                <label className="flex items-center gap-2 text-sm">
+                  <input type="checkbox" checked={pMfaReq} onChange={(e) => setPMfaReq(e.target.checked)} />
+                  <span>Wymagane MFA (TOTP)</span>
+                </label>
+              </div>
+            ) : null}
+
+            {profileTab === "reg" ? (
+              <div className="space-y-4">
+                <div className="text-xs font-semibold">Adres zameldowania (PRG/ADRUNI)</div>
+                <div className="rounded-lg border border-border bg-background/50 p-3 text-xs text-muted-foreground">
+                  Wskazówka: wybór z PRG zapisze też „tekst / legacy”, żeby nie rozwalić zgodności wstecz.
+                </div>
+
+                <PrgAddressFinder
+                  title="Adres zameldowania"
+                  description="Wybierz lokalizację z PRG."
+                  disabled={saving}
+                  onPick={(picked) => {
+                    const prg = pickToPrg(picked);
+                    setPAddrRegPrg(prg);
+                    setPAddrReg(formatPrgAddress(prg));
+
+                    if (pAddrSame) {
+                      setPAddrCurPrg(null);
+                      setPAddrCur("");
+                    }
+                  }}
+                />
+
+                <label className="space-y-1 block">
+                  <div className="text-xs text-muted-foreground">Adres zameldowania (tekst / legacy)</div>
+                  <textarea
+                    value={pAddrReg}
+                    onChange={(e) => setPAddrReg(e.target.value)}
+                    className="min-h-[92px] w-full rounded-md border border-border bg-background px-3 py-2 text-sm"
+                  />
+                </label>
+
+                <label className="flex items-center gap-2 text-sm">
+                  <input
+                    type="checkbox"
+                    checked={pAddrSame}
+                    onChange={(e) => {
+                      const checked = e.target.checked;
+                      setPAddrSame(checked);
+                      if (checked) {
+                        setPAddrCur("");
+                        setPAddrCurPrg(null);
+                      }
+                    }}
+                  />
+                  <span>Adres zamieszkania taki sam jak zameldowania</span>
+                </label>
+              </div>
+            ) : null}
+
+            {profileTab === "cur" ? (
+              <div className="space-y-4">
+                <div className="text-xs font-semibold">Adres zamieszkania (PRG/ADRUNI)</div>
+
+                {pAddrSame ? (
+                  <div className="rounded-lg border border-border bg-background/50 p-3 text-sm">
+                    <div className="text-xs text-muted-foreground">Status</div>
+                    <div className="text-sm">Taki sam jak adres zameldowania.</div>
+                    <div className="text-xs text-muted-foreground mt-2">
+                      Możesz to zmienić w zakładce „Adres zameldowania”.
+                    </div>
+                  </div>
+                ) : (
+                  <>
+                    <PrgAddressFinder
+                      title="Adres zamieszkania"
+                      description="Wybierz lokalizację z PRG dla adresu zamieszkania."
+                      disabled={saving}
+                      onPick={(picked) => {
+                        const prg = pickToPrg(picked);
+                        setPAddrCurPrg(prg);
+                        setPAddrCur(formatPrgAddress(prg));
+                      }}
+                    />
+
+                    <label className="space-y-1 block">
+                      <div className="text-xs text-muted-foreground">Adres zamieszkania (tekst / legacy)</div>
+                      <textarea
+                        value={pAddrCur}
+                        onChange={(e) => setPAddrCur(e.target.value)}
+                        className="min-h-[92px] w-full rounded-md border border-border bg-background px-3 py-2 text-sm"
+                      />
+                    </label>
+                  </>
+                )}
+              </div>
+            ) : null}
           </div>
 
-          <div className="mt-4 flex items-center justify-end gap-2">
+          {/* footer */}
+          <div className="border-t border-border p-4 flex items-center justify-end gap-2 bg-muted/20">
             <button
               onClick={() => setOpenProfile(false)}
               disabled={saving}
