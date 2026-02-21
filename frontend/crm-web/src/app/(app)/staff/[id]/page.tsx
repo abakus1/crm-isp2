@@ -347,6 +347,15 @@ export default function StaffDetailsPage() {
           </Link>
         )}
 
+        {perms.has("activity.read_all") && (
+          <Link
+            href={`/staff/${staffId}/operations`}
+            className="rounded-md border border-border px-3 py-2 text-sm hover:bg-muted/60"
+          >
+            Operacje
+          </Link>
+        )}
+
         {perms.has("staff.disable") && u?.status === "active" && (
           <button
             onClick={() => postAction(`/staff/${staffId}/disable`, "Zablokowano pracownika")}

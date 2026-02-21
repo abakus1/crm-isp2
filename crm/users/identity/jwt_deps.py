@@ -11,6 +11,7 @@ from jose import JWTError, jwt
 from sqlalchemy.orm import Session
 
 from crm.app.config import get_settings
+from crm.shared.request_context import get_request_context
 from crm.db.models.staff import ActivityLog, AuditLog, StaffUser, SystemBootstrapState
 from crm.db.session import get_db
 
@@ -81,6 +82,16 @@ def _log_activity(
     entity_id: Optional[str] = None,
 ) -> None:
     now = _utcnow()
+
+    # Always attach request context to meta for UI activity viewer (IP / UA / request_id)
+    ctx = get_request_context()
+    meta_out: Dict[str, Any] = dict(meta or {})
+    if ctx.ip and meta_out.get("ip") is None:
+        meta_out["ip"] = ctx.ip
+    if ctx.user_agent and meta_out.get("user_agent") is None:
+        meta_out["user_agent"] = ctx.user_agent
+    if ctx.request_id and meta_out.get("request_id") is None:
+        meta_out["request_id"] = ctx.request_id
     db.add(
         ActivityLog(
             occurred_at=now,
@@ -89,7 +100,7 @@ def _log_activity(
             entity_type=entity_type,
             entity_id=entity_id,
             message=message,
-            meta=meta,
+            meta=meta_out or None,
         )
     )
 

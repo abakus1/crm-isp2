@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import date
+from datetime import date, datetime
 from typing import Any, List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Header, status
@@ -41,7 +41,28 @@ from crm.users.services.rbac.admin_service import (
     RbacAdminError,
 )
 
+from crm.users.services.staff.activity_service import list_staff_activity
+
 router = APIRouter(prefix="/staff", tags=["staff"])
+
+
+class StaffActivityItemOut(BaseModel):
+    id: int
+    occurred_at: datetime
+    username: Optional[str] = None
+    ip: Optional[str] = None
+    action: str
+    entity_type: Optional[str] = None
+    entity_id: Optional[str] = None
+    message: Optional[str] = None
+    meta: Optional[dict] = None
+
+
+class StaffActivityListOut(BaseModel):
+    items: List[StaffActivityItemOut]
+    next_cursor: Optional[str] = None
+    has_more: bool
+    limit: int
 
 
 class StaffAddressPrg(BaseModel):
@@ -212,6 +233,34 @@ def _get_staff_or_404(db: Session, staff_id: int) -> StaffUser:
     if not u:
         raise HTTPException(status_code=404, detail="Staff user not found")
     return u
+
+
+@router.get(
+    "/{staff_id}/operations",
+    response_model=StaffActivityListOut,
+    dependencies=[Depends(require(Action.ACTIVITY_READ_ALL))],
+)
+def staff_operations(
+    staff_id: int,
+    db: Session = Depends(get_db),
+    limit: int = 20,
+    cursor: Optional[str] = None,
+    date_from: Optional[datetime] = None,
+    date_to: Optional[datetime] = None,
+    q: Optional[str] = None,
+    action: Optional[str] = None,
+):
+    _get_staff_or_404(db, staff_id)
+    return list_staff_activity(
+        db,
+        staff_id=staff_id,
+        limit=limit,
+        cursor=cursor,
+        date_from=date_from,
+        date_to=date_to,
+        q=q,
+        action=action,
+    )
 
 
 @router.get(
