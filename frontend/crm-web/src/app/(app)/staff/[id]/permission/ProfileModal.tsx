@@ -32,6 +32,7 @@ export function ProfileModal({
   setPDoc,
   pMfaReq,
   setPMfaReq,
+  mfaDisabled,
   // legacy
   pAddrReg,
   setPAddrReg,
@@ -77,6 +78,7 @@ export function ProfileModal({
   setPDoc: (v: string) => void;
   pMfaReq: boolean;
   setPMfaReq: (v: boolean) => void;
+  mfaDisabled?: boolean;
 
   pAddrReg: string;
   setPAddrReg: (v: string) => void;
@@ -203,7 +205,12 @@ export function ProfileModal({
 
               <div className="text-xs font-semibold">Bezpieczeństwo</div>
               <label className="flex items-center gap-2 text-sm">
-                <input type="checkbox" checked={pMfaReq} onChange={(e) => setPMfaReq(e.target.checked)} />
+                <input
+                  type="checkbox"
+                  checked={pMfaReq}
+                  onChange={(e) => setPMfaReq(e.target.checked)}
+                  disabled={!!mfaDisabled}
+                />
                 <span>Wymagane MFA (TOTP)</span>
               </label>
             </div>

@@ -290,15 +290,19 @@ export default function StaffDetailsPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [token, staffId]);
 
+  const isSelf = me?.staff_id === staffId;
+
+  // RBAC: zarządzanie (profil/rola/uprawnienia/reset) tylko jeśli user ma odpowiednie akcje.
+  // Self-edit profilu może być dopuszczone osobnym uprawnieniem staff.update.self.
   const canManage = perms.hasAny([
     "staff.update",
+    ...(isSelf ? (["staff.update.self"] as const) : []),
     "staff.role.set",
     "staff.permissions.read",
     "staff.permissions.write",
     "staff.reset_password",
     "staff.reset_totp",
   ]);
-  const isSelf = me?.staff_id === staffId;
 
   const fullName = useMemo(() => {
     const fn = (u?.first_name || "").trim();

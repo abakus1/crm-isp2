@@ -24,6 +24,7 @@ export default function StaffManagePage() {
   const staffId = Number(params?.id);
 
   const [staff, setStaff] = useState<StaffOut | null>(null);
+  const [meStaffId, setMeStaffId] = useState<number | null>(null);
   const [roles, setRoles] = useState<Role[]>([]);
   const [resolved, setResolved] = useState<ResolvedAction[]>([]);
 
@@ -80,6 +81,7 @@ export default function StaffManagePage() {
   const canOpen = perms.loaded;
   const canReadStaff = perms.has("staff.read");
   const canUpdateProfile = perms.has("staff.update");
+  const canUpdateSelf = perms.has("staff.update.self");
   const canSetRole = perms.has("staff.role.set");
   const canPermRead = perms.has("staff.permissions.read");
   const canPermWrite = perms.has("staff.permissions.write");
@@ -150,6 +152,18 @@ export default function StaffManagePage() {
 
     try {
       if (!canReadStaff) throw new ApiError(403, "Brak uprawnienia: staff.read");
+
+      // whoami (do rozróżnienia self vs admin edit)
+      try {
+        const who = await apiFetch<{ staff_id: number }>("/identity/whoami", {
+          method: "GET",
+          token,
+          onUnauthorized: handleUnauthorized,
+        });
+        setMeStaffId(who?.staff_id ?? null);
+      } catch {
+        setMeStaffId(null);
+      }
 
       const u = await apiFetch<StaffOut>(`/staff/${staffId}`, {
         method: "GET",
@@ -274,32 +288,52 @@ export default function StaffManagePage() {
     setSaving(true);
 
     try {
-      if (!canUpdateProfile) throw new ApiError(403, "Brak uprawnienia: staff.update");
+      // Ustalamy czy edytujemy siebie. Backend ma osobny self-edit (/staff/me),
+      // który nie przyjmuje pól administracyjnych (np. mfa_required).
+      const who = await apiFetch<{ staff_id: number }>("/identity/whoami", {
+        method: "GET",
+        token,
+        onUnauthorized: handleUnauthorized,
+      });
+      const isSelf = who?.staff_id === staff.id;
 
-      const out = await apiFetch<StaffOut>(`/staff/${staff.id}`, {
+      if (isSelf) {
+        if (!canUpdateSelf && !canUpdateProfile) {
+          throw new ApiError(403, "Brak uprawnienia: staff.update.self");
+        }
+      } else {
+        if (!canUpdateProfile) throw new ApiError(403, "Brak uprawnienia: staff.update");
+      }
+
+      const endpoint = isSelf ? "/staff/me" : `/staff/${staff.id}`;
+      const body: any = {
+        first_name: pFirst,
+        last_name: pLast,
+        email: pEmail || null,
+        phone_company: pPhone || null,
+        job_title: pTitle || null,
+        birth_date: pBirth || null,
+        pesel: pPesel || null,
+        id_document_no: pDoc || null,
+
+        // legacy
+        address_registered: pAddrReg || null,
+        address_current: pAddrSame ? null : pAddrCur || null,
+
+        // structured PRG
+        address_registered_prg: pAddrRegPrg || null,
+        address_current_prg: pAddrSame ? null : pAddrCurPrg || null,
+
+        address_current_same_as_registered: pAddrSame,
+      };
+
+      // tylko adminowy edit przyjmuje mfa_required
+      if (!isSelf) body.mfa_required = pMfaReq;
+
+      const out = await apiFetch<StaffOut>(endpoint, {
         method: "PUT",
         token,
-        body: {
-          first_name: pFirst,
-          last_name: pLast,
-          email: pEmail || null,
-          phone_company: pPhone || null,
-          job_title: pTitle || null,
-          birth_date: pBirth || null,
-          pesel: pPesel || null,
-          id_document_no: pDoc || null,
-
-          // legacy
-          address_registered: pAddrReg || null,
-          address_current: pAddrSame ? null : pAddrCur || null,
-
-          // structured PRG
-          address_registered_prg: pAddrRegPrg || null,
-          address_current_prg: pAddrSame ? null : pAddrCurPrg || null,
-
-          address_current_same_as_registered: pAddrSame,
-          mfa_required: pMfaReq,
-        },
+        body,
         onUnauthorized: handleUnauthorized,
       });
 
@@ -521,6 +555,7 @@ export default function StaffManagePage() {
         setPDoc={setPDoc}
         pMfaReq={pMfaReq}
         setPMfaReq={setPMfaReq}
+        mfaDisabled={meStaffId !== null && staff?.id === meStaffId}
         pAddrReg={pAddrReg}
         setPAddrReg={setPAddrReg}
         pAddrCur={pAddrCur}
