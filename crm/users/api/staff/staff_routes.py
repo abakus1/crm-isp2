@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from typing import List, Optional
+from datetime import date
+from typing import Any, List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Header, status
 from pydantic import BaseModel, EmailStr, Field
@@ -17,6 +18,8 @@ from crm.users.services.staff.staff_admin_service import (
     create_staff_user,
     reset_staff_password,
     reset_staff_totp,
+    set_staff_role,
+    update_staff_profile,
     StaffAdminError,
 )
 
@@ -41,14 +44,58 @@ from crm.users.services.rbac.admin_service import (
 router = APIRouter(prefix="/staff", tags=["staff"])
 
 
+class StaffAddressPrg(BaseModel):
+    place_name: Optional[str] = None
+    terc: Optional[str] = None
+    simc: Optional[str] = None
+    street_name: Optional[str] = None
+    ulic: Optional[str] = None
+    building_no: Optional[str] = None
+    local_no: Optional[str] = None
+    postal_code: Optional[str] = None
+    post_city: Optional[str] = None
+
+
 class StaffCreateIn(BaseModel):
+    # Docelowo: imię/nazwisko/login/email_prywatny/telefon_firmowy
+    first_name: str = Field(..., min_length=1, max_length=80)
+    last_name: str = Field(..., min_length=1, max_length=120)
     username: str = Field(..., min_length=3, max_length=64)
     email: EmailStr
-    role: str = Field(..., min_length=2, max_length=64)
+    phone_company: Optional[str] = Field(default=None, max_length=32)
 
 
 class StaffArchiveIn(BaseModel):
     reason: Optional[str] = Field(default=None, max_length=500)
+
+
+class StaffUpdateIn(BaseModel):
+    # profil
+    first_name: Optional[str] = Field(default=None, max_length=80)
+    last_name: Optional[str] = Field(default=None, max_length=120)
+    email: Optional[EmailStr] = None
+    phone_company: Optional[str] = Field(default=None, max_length=32)
+    job_title: Optional[str] = Field(default=None, max_length=120)
+    birth_date: Optional[date] = None
+    pesel: Optional[str] = Field(default=None, max_length=11)
+    id_document_no: Optional[str] = Field(default=None, max_length=32)
+
+    # legacy (utrzymujemy)
+    address_registered: Optional[str] = None
+    address_current: Optional[str] = None
+
+    # ✅ PRG canon
+    address_registered_prg: Optional[StaffAddressPrg] = None
+    address_current_prg: Optional[StaffAddressPrg] = None
+
+    address_current_same_as_registered: Optional[bool] = None
+
+    # bezpieczeństwo (policy: admin może wymusić/zdjąć requirement MFA)
+    mfa_required: Optional[bool] = None
+
+
+class StaffRoleUpdateIn(BaseModel):
+    role: str = Field(..., min_length=1, max_length=64)
 
 
 class StaffOut(BaseModel):
@@ -60,8 +107,67 @@ class StaffOut(BaseModel):
     must_change_credentials: bool
     mfa_required: bool
 
+    # profile (opcjonalne)
+    first_name: Optional[str] = None
+    last_name: Optional[str] = None
+    phone_company: Optional[str] = None
+    job_title: Optional[str] = None
+    birth_date: Optional[str] = None
+    pesel: Optional[str] = None
+    id_document_no: Optional[str] = None
+
+    # legacy
+    address_registered: Optional[str] = None
+    address_current: Optional[str] = None
+    address_current_same_as_registered: Optional[bool] = None
+
+    # ✅ PRG canon
+    address_registered_prg: Optional[StaffAddressPrg] = None
+    address_current_prg: Optional[StaffAddressPrg] = None
+
     @classmethod
     def from_model(cls, u: StaffUser) -> "StaffOut":
+        bd = getattr(u, "birth_date", None)
+
+        reg_prg = StaffAddressPrg(
+            place_name=getattr(u, "address_registered_prg_place_name", None),
+            terc=getattr(u, "address_registered_prg_terc", None),
+            simc=getattr(u, "address_registered_prg_simc", None),
+            street_name=getattr(u, "address_registered_prg_street_name", None),
+            ulic=getattr(u, "address_registered_prg_ulic", None),
+            building_no=getattr(u, "address_registered_prg_building_no", None),
+            local_no=getattr(u, "address_registered_prg_local_no", None),
+            postal_code=getattr(u, "address_registered_postal_code", None),
+            post_city=getattr(u, "address_registered_post_city", None),
+        )
+
+        cur_prg = StaffAddressPrg(
+            place_name=getattr(u, "address_current_prg_place_name", None),
+            terc=getattr(u, "address_current_prg_terc", None),
+            simc=getattr(u, "address_current_prg_simc", None),
+            street_name=getattr(u, "address_current_prg_street_name", None),
+            ulic=getattr(u, "address_current_prg_ulic", None),
+            building_no=getattr(u, "address_current_prg_building_no", None),
+            local_no=getattr(u, "address_current_prg_local_no", None),
+            postal_code=getattr(u, "address_current_postal_code", None),
+            post_city=getattr(u, "address_current_post_city", None),
+        )
+
+        def _is_empty(x: StaffAddressPrg) -> bool:
+            return not any(
+                [
+                    x.place_name,
+                    x.terc,
+                    x.simc,
+                    x.street_name,
+                    x.ulic,
+                    x.building_no,
+                    x.local_no,
+                    x.postal_code,
+                    x.post_city,
+                ]
+            )
+
         return cls(
             id=int(u.id),
             username=u.username,
@@ -70,6 +176,21 @@ class StaffOut(BaseModel):
             status=str(u.status),
             must_change_credentials=bool(u.must_change_credentials),
             mfa_required=bool(u.mfa_required),
+
+            first_name=getattr(u, "first_name", None),
+            last_name=getattr(u, "last_name", None),
+            phone_company=getattr(u, "phone_company", None),
+            job_title=getattr(u, "job_title", None),
+            birth_date=bd.isoformat() if bd else None,
+            pesel=getattr(u, "pesel", None),
+            id_document_no=getattr(u, "id_document_no", None),
+
+            address_registered=getattr(u, "address_registered", None),
+            address_current=getattr(u, "address_current", None),
+            address_current_same_as_registered=getattr(u, "address_current_same_as_registered", None),
+
+            address_registered_prg=None if _is_empty(reg_prg) else reg_prg,
+            address_current_prg=None if _is_empty(cur_prg) else cur_prg,
         )
 
 
@@ -83,7 +204,6 @@ class StaffPermissionOut(BaseModel):
 
 
 class StaffPermissionsUpdateIn(BaseModel):
-    # { action_code: "allow" | "deny" | null }
     overrides: dict = Field(default_factory=dict)
 
 
@@ -94,7 +214,6 @@ def _get_staff_or_404(db: Session, staff_id: int) -> StaffUser:
     return u
 
 
-# ✅ NOWE: staff widzi zawsze siebie
 @router.get(
     "/self",
     response_model=StaffOut,
@@ -105,9 +224,22 @@ def staff_self(
     db: Session = Depends(get_db),
     _me: StaffUser = Depends(get_current_user),
 ):
-    # _me już jest z DB, ale trzymajmy schemat
     me = db.get(StaffUser, int(_me.id)) or _me
     return StaffOut.from_model(me)
+
+
+@router.get(
+    "/{staff_id}",
+    response_model=StaffOut,
+    dependencies=[Depends(require(Action.STAFF_READ))],
+)
+def staff_get_one(
+    staff_id: int,
+    db: Session = Depends(get_db),
+    _me: StaffUser = Depends(get_current_user),
+):
+    u = _get_staff_or_404(db, staff_id)
+    return StaffOut.from_model(u)
 
 
 @router.get(
@@ -190,12 +322,17 @@ def admin_create_staff(
         u = create_staff_user(
             db,
             actor=_me,
+            first_name=payload.first_name,
+            last_name=payload.last_name,
             username=payload.username,
             email=str(payload.email),
-            role=payload.role,
+            phone_company=payload.phone_company,
         )
+        db.commit()
+        db.refresh(u)
         return StaffOut.from_model(u)
     except StaffAdminError as e:
+        db.rollback()
         raise HTTPException(status_code=400, detail=str(e)) from e
 
 
@@ -333,3 +470,70 @@ def admin_unarchive_staff(
         return res.__dict__
     except StaffAccessError as e:
         raise HTTPException(status_code=400, detail=str(e))
+
+
+@router.put(
+    "/{staff_id}",
+    response_model=StaffOut,
+    dependencies=[Depends(require(Action.STAFF_UPDATE))],
+)
+def admin_update_staff_profile(
+    staff_id: int,
+    payload: StaffUpdateIn,
+    request: Request,
+    db: Session = Depends(get_db),
+    _me: StaffUser = Depends(get_current_user),
+):
+    u = _get_staff_or_404(db, staff_id)
+
+    # self-edit przez ten endpoint blokujemy twardo (policy: pracownik nie edytuje siebie)
+    if int(_me.id) == int(u.id):
+        raise HTTPException(status_code=403, detail="Self-edit jest zabroniony")
+
+    # patch tylko dla pól które przyszły (exclude_unset)
+    patch: dict[str, Any] = payload.model_dump(exclude_unset=True)
+
+    try:
+        update_staff_profile(
+            db,
+            actor_staff_id=int(_me.id),
+            target=u,
+            patch=patch,
+        )
+        db.commit()
+        db.refresh(u)
+        return StaffOut.from_model(u)
+    except StaffAdminError as e:
+        db.rollback()
+        raise HTTPException(status_code=400, detail=str(e)) from e
+
+
+@router.put(
+    "/{staff_id}/role",
+    response_model=StaffOut,
+    dependencies=[Depends(require(Action.STAFF_ROLE_SET))],
+)
+def admin_set_staff_role(
+    staff_id: int,
+    payload: StaffRoleUpdateIn,
+    db: Session = Depends(get_db),
+    _me: StaffUser = Depends(get_current_user),
+):
+    u = _get_staff_or_404(db, staff_id)
+
+    if int(_me.id) == int(u.id):
+        raise HTTPException(status_code=403, detail="Nie zmieniasz sobie roli 😅")
+
+    try:
+        set_staff_role(
+            db,
+            actor_staff_id=int(_me.id),
+            target=u,
+            role_code=payload.role,
+        )
+        db.commit()
+        db.refresh(u)
+        return StaffOut.from_model(u)
+    except StaffAdminError as e:
+        db.rollback()
+        raise HTTPException(status_code=400, detail=str(e)) from e
