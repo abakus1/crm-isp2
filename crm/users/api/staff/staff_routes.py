@@ -228,6 +228,70 @@ def staff_self(
     return StaffOut.from_model(me)
 
 
+@router.put(
+    "/me",
+    response_model=StaffOut,
+    dependencies=[Depends(require(Action.STAFF_UPDATE_SELF))],
+)
+def staff_update_me(
+    payload: StaffUpdateIn,
+    request: Request,
+    db: Session = Depends(get_db),
+    _me: StaffUser = Depends(get_current_user),
+):
+    """Self-edit profilu (osobna ścieżka od adminowego PUT /staff/{id}).
+
+    Celowo rozdzielone:
+    - /staff/{id} => admin edytuje INNYCH (self-edit twardo zabroniony)
+    - /staff/me   => user edytuje SAMEGO SIEBIE (z dedykowaną akcją RBAC)
+
+    Na razie pozwalamy na pola profilowe + adresy.
+    Pola administracyjne (np. mfa_required) są blokowane w self-edit.
+    """
+
+    me = db.get(StaffUser, int(_me.id)) or _me
+
+    patch: dict[str, Any] = payload.model_dump(exclude_unset=True)
+
+    # twarda lista pól, które wolno samemu edytować
+    allowed_self_fields = {
+        "first_name",
+        "last_name",
+        "email",
+        "phone_company",
+        "job_title",
+        "birth_date",
+        "pesel",
+        "id_document_no",
+        "address_registered",
+        "address_current",
+        "address_registered_prg",
+        "address_current_prg",
+        "address_current_same_as_registered",
+    }
+
+    unknown = sorted([k for k in patch.keys() if k not in allowed_self_fields])
+    if unknown:
+        raise HTTPException(status_code=400, detail=f"Nieobsługiwane pola w self-edit: {', '.join(unknown)}")
+
+    try:
+        update_staff_profile(
+            db,
+            actor_staff_id=int(_me.id),
+            target=me,
+            patch=patch,
+            audit_action="STAFF_UPDATE_SELF",
+            activity_action="STAFF_UPDATE_SELF",
+            activity_message="Zaktualizowano własne dane profilu",
+        )
+        db.commit()
+        db.refresh(me)
+        return StaffOut.from_model(me)
+    except StaffAdminError as e:
+        db.rollback()
+        raise HTTPException(status_code=400, detail=str(e)) from e
+
+
 @router.get(
     "/{staff_id}",
     response_model=StaffOut,

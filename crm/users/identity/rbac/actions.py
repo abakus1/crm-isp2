@@ -35,6 +35,7 @@ class Action(str, Enum):
     STAFF_RESET_PASSWORD = "staff.reset_password"
     STAFF_RESET_TOTP = "staff.reset_totp"
     STAFF_UPDATE = "staff.update"
+    STAFF_UPDATE_SELF = "staff.update.self"
     STAFF_ROLE_SET = "staff.role.set"
     STAFF_PERMISSIONS_READ = "staff.permissions.read"
     STAFF_PERMISSIONS_WRITE = "staff.permissions.write"

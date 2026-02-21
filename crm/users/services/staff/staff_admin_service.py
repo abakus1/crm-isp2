@@ -488,10 +488,16 @@ def update_staff_profile(
     actor_staff_id: int,
     target: StaffUser,
     patch: Dict[str, Any],
+    audit_action: str = "STAFF_UPDATE",
+    activity_action: str = "STAFF_UPDATE",
+    activity_message: Optional[str] = None,
 ) -> StaffUser:
-    """Admin/uprawniony: aktualizacja profilu pracownika.
+    """Aktualizacja profilu pracownika.
 
-    Zasada: pracownik NIE edytuje sam siebie (to jest endpoint admin-only).
+    Domyślnie używana w ścieżkach adminowych (actor edytuje target).
+    Może być użyta także do self-edit, jeśli API/policy na to pozwoli
+    (wtedy ustaw audit_action/activity_action na wariant SELF).
+
     Patch jest walidowany na poziomie API (Pydantic).
     """
 
@@ -694,7 +700,7 @@ def update_staff_profile(
         db=db,
         staff_user_id=int(actor_staff_id),
         severity="info",
-        action="STAFF_UPDATE",
+        action=str(audit_action),
         entity_type="staff_users",
         entity_id=str(target.id),
         before=before,
@@ -704,8 +710,8 @@ def update_staff_profile(
     _activity(
         db=db,
         staff_user_id=int(actor_staff_id),
-        action="STAFF_UPDATE",
-        message=f"Zaktualizowano dane pracownika {target.username}",
+        action=str(activity_action),
+        message=(activity_message or f"Zaktualizowano dane pracownika {target.username}"),
         entity_type="staff_users",
         entity_id=str(target.id),
     )
