@@ -187,3 +187,29 @@ To jest kontrolowany, modułowy system operacyjny dla ISP.
 - Repo czyste i zsynchronizowane z origin/main
 
 Kolejny krok: migracja pozostałych domen do modelu modułowego.
+
+
+---
+
+# 🔍 Logowanie operacji (Audit + Activity)
+
+W systemie mamy **dwa typy logów**:
+
+1) **audit_log** – zdarzenia bezpieczeństwa / krytyczne (np. login, zmiana hasła, disable/enable pracownika).
+   - Zwykle zawiera *before/after*.
+
+2) **activity_log** – “kto kliknął co w systemie”.
+   - To jest nasz **pas bezpieczeństwa**: jeśli endpoint zmienia dane (POST/PUT/PATCH/DELETE), to zapisujemy zdarzenie.
+
+## Jak to działa (prosto)
+
+- Middleware `crm/core/audit/activity_middleware.py` łapie wszystkie żądania:
+  - POST / PUT / PATCH / DELETE
+- Wrzuca rekord do `crm.activity_log` z:
+  - `action` = np. `PUT /staff/123`
+  - `meta` = metoda, ścieżka, status HTTP, czas, request_id, IP, user-agent (ucięty), lista kluczy query (bez wartości)
+
+Dzięki temu:
+- mamy ślad audytowy “kto i kiedy coś robił” (ważne pod NIS2 i wewnętrzne audyty),
+- a jednocześnie nie zalewamy bazy logami z GET-ów.
+
