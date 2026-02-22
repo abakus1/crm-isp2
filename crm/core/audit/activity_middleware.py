@@ -1,115 +1,119 @@
-# crm/core/audit/activity_middleware.py
 from __future__ import annotations
 
 import time
-from typing import Optional
+from typing import Any, Optional
 
 from fastapi import Request
-from starlette.responses import Response
+from starlette.middleware.base import BaseHTTPMiddleware
 
 from crm.db.session import SessionLocal
 from crm.db.models.staff import ActivityLog
 from crm.shared.request_context import get_request_context
+from crm.users.identity.jwt_deps import get_claims
 
-# Logujemy wszystko co jest “kliknięciem” w UI:
-# - POST / PUT / PATCH / DELETE
-# (GET zostawiamy w spokoju, bo to zwykle “oglądanie”.)
-_MUTATING = {"POST", "PUT", "PATCH", "DELETE"}
-
-# Ścieżki, które NIE powinny generować activity (żeby nie spamować):
-# - health check
-_SKIP_PREFIXES = ("/health",)
+from crm.core.audit.activity_context import get_activity_entity, infer_entity_from_path
 
 
-def _try_get_staff_user_id(request: Request) -> Optional[int]:
-    # Token jest już walidowany przez private_by_default middleware, ale:
-    # - identity endpoints mogą być wywołane bez tokena,
-    # - czasem lecimy po 401.
+_MUTATING_METHODS = {"POST", "PUT", "PATCH", "DELETE"}
+
+# Nie logujemy tych ścieżek (szczególnie /identity — hasła/MFA)
+_SKIP_PREFIXES = (
+    "/health",
+    "/identity/",
+)
+
+
+def _safe_trunc(s: Optional[str], limit: int) -> Optional[str]:
+    if s is None:
+        return None
+    s = str(s)
+    return s if len(s) <= limit else (s[: limit - 3] + "...")
+
+
+def _extract_staff_user_id(request: Request) -> Optional[int]:
     auth = request.headers.get("authorization", "")
     if not auth.lower().startswith("bearer "):
         return None
     token = auth.split(" ", 1)[1].strip()
     if not token:
         return None
-
-    # Lokalny import, żeby uniknąć cykli przy starcie
-    from crm.users.identity.jwt_deps import get_claims
-
     try:
         claims = get_claims(token)
+        # u nas 'sub' trzyma staff_user_id (int)
         return int(claims.sub)
     except Exception:
         return None
 
 
-def should_log_activity(request: Request) -> bool:
-    if request.method not in _MUTATING:
-        return False
-    path = request.url.path or "/"
-    if path.startswith(_SKIP_PREFIXES):
-        return False
-    return True
+class ActivityLogMiddleware(BaseHTTPMiddleware):
+    """Automatyczne logowanie operacji (klików) do crm.activity_log.
 
+    Kontrakt:
+    - logujemy wszystkie mutujące requesty (POST/PUT/PATCH/DELETE)
+    - entity_type/entity_id bierzemy z request.state (set_activity_entity)
+      a jeśli brak — próbujemy awaryjnie z URL
+    - best-effort: błąd zapisu logu NIE blokuje odpowiedzi
+    """
 
-async def activity_log_middleware(request: Request, call_next) -> Response:
-    if not should_log_activity(request):
-        return await call_next(request)
+    async def dispatch(self, request: Request, call_next):
+        path = request.url.path or "/"
 
-    t0 = time.perf_counter()
-    response: Response
-    try:
-        response = await call_next(request)
-    except Exception:
-        # Nawet jak wybuchło, to też jest “zdarzenie”.
-        # Nie podmieniamy błędu — tylko logujemy.
-        duration_ms = int((time.perf_counter() - t0) * 1000)
-        _write_activity(request, status_code=500, duration_ms=duration_ms)
-        raise
+        if request.method.upper() not in _MUTATING_METHODS:
+            return await call_next(request)
 
-    duration_ms = int((time.perf_counter() - t0) * 1000)
-    _write_activity(request, status_code=response.status_code, duration_ms=duration_ms)
-    return response
+        for pref in _SKIP_PREFIXES:
+            if path.startswith(pref):
+                return await call_next(request)
 
+        started = time.perf_counter()
+        response = None
+        try:
+            response = await call_next(request)
+            return response
+        finally:
+            duration_ms = int((time.perf_counter() - started) * 1000)
 
-def _write_activity(request: Request, *, status_code: int, duration_ms: int) -> None:
-    from crm.core.audit.activity_utils import build_activity_meta, safe_user_agent
+            # Zbieramy meta z contextvar (ustawione w request_context_mw)
+            ctx = get_request_context()
 
-    ctx = get_request_context()
-    ip = ctx.ip
-    request_id = ctx.request_id
-    ua = safe_user_agent(request)
+            entity_type, entity_id = get_activity_entity(request)
+            if not entity_type or not entity_id:
+                et, eid = infer_entity_from_path(path)
+                entity_type = entity_type or et
+                entity_id = entity_id or eid
 
-    staff_user_id = _try_get_staff_user_id(request)
+            meta: dict[str, Any] = {
+                "method": request.method.upper(),
+                "path": path,
+                "status_code": getattr(response, "status_code", None),
+                "duration_ms": duration_ms,
+                "request_id": ctx.request_id,
+                "ip": ctx.ip,
+                "user_agent": _safe_trunc(ctx.user_agent, 300),
+            }
 
-    # Akcja: prosto i przewidywalnie.
-    # Przy analizie logów chcesz grepować po ścieżce, więc trzymamy “METHOD /path”.
-    action = f"{request.method} {request.url.path}"
+            # Query keys są ok, ale nie wartości
+            if request.query_params:
+                meta["query_keys"] = list(request.query_params.keys())
 
-    meta = build_activity_meta(
-        request=request,
-        request_id=request_id,
-        ip=ip,
-        user_agent=ua,
-        status_code=status_code,
-        duration_ms=duration_ms,
-    )
+            staff_user_id = _extract_staff_user_id(request)
 
-    db = SessionLocal()
-    try:
-        db.add(
-            ActivityLog(
-                staff_user_id=staff_user_id,
-                action=action,
-                entity_type=None,
-                entity_id=None,
-                message=None,
-                meta=meta,
-            )
-        )
-        db.commit()
-    except Exception:
-        db.rollback()
-        # Logi nie mogą zatrzymać systemu.
-        # (W prod warto to wysłać do Sentry/STDERR, ale tu trzymamy ciszę.)
-    finally:
-        db.close()
+            # Zapis do DB (best-effort)
+            try:
+                db = SessionLocal()
+                try:
+                    row = ActivityLog(
+                        staff_user_id=staff_user_id,
+                        action=f"{request.method.upper()} {path}",
+                        entity_type=entity_type,
+                        entity_id=entity_id,
+                        message=None,
+                        meta=meta,
+                    )
+                    db.add(row)
+                    db.commit()
+                finally:
+                    db.close()
+            except Exception:
+                # Nie blokujemy requestu przez logowanie
+                pass

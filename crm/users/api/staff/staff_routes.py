@@ -43,6 +43,8 @@ from crm.users.services.rbac.admin_service import (
 
 from crm.users.services.staff.activity_service import list_staff_activity
 
+from crm.core.audit.activity_context import entity_from_path_param, set_activity_entity
+
 router = APIRouter(prefix="/staff", tags=["staff"])
 
 
@@ -441,6 +443,8 @@ def admin_create_staff(
             email=str(payload.email),
             phone_company=payload.phone_company,
         )
+        # activity_log: encja = utworzony pracownik
+        set_activity_entity(request, entity_type="staff_user", entity_id=int(u.id))
         db.commit()
         db.refresh(u)
         return StaffOut.from_model(u)
@@ -458,6 +462,7 @@ def admin_reset_staff_password(
     staff_id: int,
     db: Session = Depends(get_db),
     _me: StaffUser = Depends(get_current_user),
+    _entity: None = Depends(entity_from_path_param("staff_user", param_name="staff_id")),
 ):
     u = _get_staff_or_404(db, staff_id)
     reset_staff_password(db, staff_user=u, reset_by_staff_id=int(_me.id))
@@ -473,6 +478,7 @@ def admin_reset_staff_totp(
     staff_id: int,
     db: Session = Depends(get_db),
     _me: StaffUser = Depends(get_current_user),
+    _entity: None = Depends(entity_from_path_param("staff_user", param_name="staff_id")),
 ):
     u = _get_staff_or_404(db, staff_id)
     reset_staff_totp(db, staff_user=u, reset_by_staff_id=int(_me.id))
@@ -490,6 +496,7 @@ def admin_disable_staff(
     db: Session = Depends(get_db),
     _me: StaffUser = Depends(get_current_user),
     x_request_id: Optional[str] = Header(default=None),
+    _entity: None = Depends(entity_from_path_param("staff_user", param_name="staff_id")),
 ):
     try:
         res = disable_staff_user(
@@ -516,6 +523,7 @@ def admin_enable_staff(
     db: Session = Depends(get_db),
     _me: StaffUser = Depends(get_current_user),
     x_request_id: Optional[str] = Header(default=None),
+    _entity: None = Depends(entity_from_path_param("staff_user", param_name="staff_id")),
 ):
     try:
         res = enable_staff_user(
@@ -543,6 +551,7 @@ def admin_archive_staff(
     db: Session = Depends(get_db),
     _me: StaffUser = Depends(get_current_user),
     x_request_id: Optional[str] = Header(default=None),
+    _entity: None = Depends(entity_from_path_param("staff_user", param_name="staff_id")),
 ):
     try:
         res = archive_staff_user(
@@ -570,6 +579,7 @@ def admin_unarchive_staff(
     db: Session = Depends(get_db),
     _me: StaffUser = Depends(get_current_user),
     x_request_id: Optional[str] = Header(default=None),
+    _entity: None = Depends(entity_from_path_param("staff_user", param_name="staff_id")),
 ):
     try:
         res = unarchive_staff_user(
@@ -596,6 +606,7 @@ def admin_update_staff_profile(
     request: Request,
     db: Session = Depends(get_db),
     _me: StaffUser = Depends(get_current_user),
+    _entity: None = Depends(entity_from_path_param("staff_user", param_name="staff_id")),
 ):
     u = _get_staff_or_404(db, staff_id)
 

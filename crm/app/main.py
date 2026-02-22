@@ -9,6 +9,8 @@ from starlette.responses import JSONResponse
 
 from crm.shared.request_context import set_request_context
 
+from crm.core.audit.activity_middleware import ActivityLogMiddleware
+
 from crm.users.module import register as register_users
 from crm.prg.module import register as register_prg
 
@@ -72,13 +74,11 @@ def create_app() -> FastAPI:
         request_id = request.headers.get("x-request-id")
         set_request_context(ip=ip, user_agent=user_agent, request_id=request_id)
         return await call_next(request)
-    # --- Activity log (każdy 'klik' w UI: POST/PUT/PATCH/DELETE) ---
-    from crm.core.audit.activity_middleware import activity_log_middleware
 
-    @app.middleware("http")
-    async def activity_log_mw(request: Request, call_next):
-        return await activity_log_middleware(request, call_next)
-
+    # --- Activity log (klik-log) ---
+    # Loguje POST/PUT/PATCH/DELETE do crm.activity_log (best-effort).
+    # Uwaga: request_context_mw ustawia ip/user-agent/request-id w contextvar.
+    app.add_middleware(ActivityLogMiddleware)
 
     # --- Allowlist IP (ADMIN zone etc. later) ---
     allowed_nets = _parse_allowed_nets(settings.security_allowlist_ips)

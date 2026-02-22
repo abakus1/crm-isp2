@@ -1,7 +1,7 @@
 # crm/prg/api/prg_routes.py
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Query, BackgroundTasks
+from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Query, BackgroundTasks, Request
 from sqlalchemy.orm import Session
 from sqlalchemy import select, and_, or_, func
 from uuid import UUID
@@ -31,6 +31,8 @@ from crm.prg.schemas import (
 )
 from crm.prg.services.prg_service import PrgService, PrgError
 from crm.prg.services.reconcile_service import PrgReconcileService
+
+from crm.core.audit.activity_context import set_activity_entity
 
 
 router = APIRouter(prefix="/prg", tags=["prg"])
@@ -122,12 +124,15 @@ def prg_state(
 
 @router.post("/fetch/run", response_model=PrgJobStartOut)
 def prg_fetch_run(
+    request: Request,
     bg: BackgroundTasks,
     db: Session = Depends(get_db),
     me: StaffUser = Depends(require(Action.PRG_IMPORT_RUN)),
 ):
     try:
         job = PrgService(db).start_fetch_job(actor_staff_id=int(me.id))
+        # activity_log: encja = job PRG
+        set_activity_entity(request, entity_type="prg_job", entity_id=str(job.id))
         db.commit()
         bg.add_task(PrgService.run_fetch_job_background, str(job.id))
         return PrgJobStartOut(job=_job_to_out(job))
@@ -139,12 +144,14 @@ def prg_fetch_run(
 @router.post("/import/run", response_model=PrgJobStartOut)
 def prg_import_run(
     payload: PrgImportRunIn,
+    request: Request,
     bg: BackgroundTasks,
     db: Session = Depends(get_db),
     me: StaffUser = Depends(require(Action.PRG_IMPORT_RUN)),
 ):
     try:
         job = PrgService(db).start_import_job(mode=payload.mode, actor_staff_id=int(me.id))
+        set_activity_entity(request, entity_type="prg_job", entity_id=str(job.id))
         db.commit()
         bg.add_task(PrgService.run_import_job_background, str(job.id))
         return PrgJobStartOut(job=_job_to_out(job))
@@ -155,6 +162,7 @@ def prg_import_run(
 
 @router.post("/jobs/cancel", response_model=PrgJobOut)
 def prg_jobs_cancel(
+    request: Request,
     db: Session = Depends(get_db),
     me: StaffUser = Depends(require(Action.PRG_IMPORT_RUN)),
 ):
@@ -166,6 +174,7 @@ def prg_jobs_cancel(
     """
     try:
         job = PrgService(db).cancel_active_job(actor_staff_id=int(me.id))
+        set_activity_entity(request, entity_type="prg_job", entity_id=str(job.id))
         db.commit()
         return _job_to_out(job)
     except PrgError as e:
