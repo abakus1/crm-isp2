@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from sqlalchemy import BigInteger, Boolean, DateTime, ForeignKey, Identity, Integer, String, text
+from sqlalchemy import BigInteger, Boolean, DateTime, ForeignKey, Identity, Integer, Numeric, String, text
 from sqlalchemy.dialects.postgresql import ENUM, JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -51,6 +51,19 @@ class Contract(Base):
     term_months: Mapped[int | None] = mapped_column(Integer, nullable=True)
     notice_days: Mapped[int | None] = mapped_column(Integer, nullable=True)
     billing_day: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("1"))
+
+    # --- Pricing terms (kontraktowe polityki cenowe) ---
+    # 1) Jednorazowa podwyżka po zakończeniu terminu (umowa na czas określony -> przejście na czas nieokreślony)
+    post_term_increase_enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=text("false"))
+    post_term_increase_amount: Mapped[float | None] = mapped_column(Numeric(10, 2), nullable=True)
+
+    # 2) Cykliczne podwyżki co N miesięcy (domyślnie co 12)
+    annual_increase_enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=text("false"))
+    annual_increase_amount: Mapped[float | None] = mapped_column(Numeric(10, 2), nullable=True)
+    annual_increase_every_months: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("12"))
+
+    # Horyzont materializowanego harmonogramu cen (miesiące); 120 = 10 lat.
+    price_schedule_horizon_months: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("120"))
 
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=text("now()"))
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=text("now()"))
