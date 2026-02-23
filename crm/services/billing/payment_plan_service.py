@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import hashlib
-
 from dataclasses import dataclass
 from datetime import date, datetime
 from decimal import Decimal, ROUND_HALF_UP
@@ -13,6 +12,7 @@ from crm.domains.billing.enums import PaymentPlanItemType
 from crm.domains.billing.repositories import PaymentPlanRepository
 from crm.services.billing.date_math import first_day_of_month, last_day_of_month
 
+
 def _make_idempotency_key(*parts: object) -> str:
     """Deterministyczny klucz idempotencji.
 
@@ -21,7 +21,6 @@ def _make_idempotency_key(*parts: object) -> str:
     """
     raw = "|".join("" if p is None else str(p) for p in parts).encode("utf-8")
     return hashlib.sha256(raw).hexdigest()
-
 
 
 def _q2(amount: Decimal) -> Decimal:
@@ -48,6 +47,8 @@ class PaymentPlanService:
     """Minimalna warstwa use-case dla payment_plan_items.
 
     Na razie bez księgowości/Optimy. Zapisujemy tylko plan pozycji.
+
+    Uwaga: dopóki nie mamy price schedule / katalogu jako źródła cen, metody przyjmują kwoty z payloadu.
     """
 
     def __init__(self, db: Session) -> None:
@@ -132,6 +133,104 @@ class PaymentPlanService:
                 end,
                 monthly_net,
                 vat_rate,
+            ),
+        )
+        return item.id
+
+    def add_prorata_price_difference(
+        self,
+        *,
+        contract_id: int,
+        subscription_id: int,
+        changed_at: datetime,
+        old_monthly_net: Decimal,
+        new_monthly_net: Decimal,
+        vat_rate: Decimal = Decimal("23.00"),
+        currency: str = "PLN",
+        description: str | None = None,
+    ) -> int | None:
+        """Prorata różnicy ceny od dnia zmiany do końca bieżącego miesiąca.
+
+        Użycie: upgrade natychmiast (albo downgrade natychmiast w przyszłości, jeśli kiedyś dopuszczimy).
+        """
+        start = changed_at.date()
+        end = last_day_of_month(start)
+        days = (end - start).days + 1
+
+        diff = _q2(new_monthly_net - old_monthly_net)
+        if diff == Decimal("0.00"):
+            return None
+
+        net = compute_30_day_prorata(diff, days=days)
+        gross = compute_gross(net, vat_rate)
+        billing_month = first_day_of_month(start)
+
+        item = self._repo.create_item(
+            contract_id=contract_id,
+            subscription_id=subscription_id,
+            item_type=PaymentPlanItemType.ADJUSTMENT,
+            billing_month=billing_month,
+            period_start=start,
+            period_end=end,
+            amount_net=float(net),
+            vat_rate=float(vat_rate),
+            amount_gross=float(gross),
+            currency=currency,
+            description=description
+            or ("Dopłata za zmianę abonamentu (prorata różnicy)" if net >= 0 else "Korekta za zmianę abonamentu"),
+            idempotency_key=_make_idempotency_key(
+                "prorata_price_diff",
+                contract_id,
+                subscription_id,
+                billing_month,
+                start,
+                end,
+                old_monthly_net,
+                new_monthly_net,
+                vat_rate,
+            ),
+        )
+        return item.id
+
+    def add_adjustment(
+        self,
+        *,
+        contract_id: int,
+        subscription_id: Optional[int],
+        billing_month: date,
+        period_start: date,
+        period_end: date,
+        net_amount: Decimal,
+        vat_rate: Decimal = Decimal("23.00"),
+        currency: str = "PLN",
+        description: str | None = None,
+        idempotency_key_parts: tuple[object, ...] | None = None,
+    ) -> int:
+        month_bucket = first_day_of_month(billing_month)
+        gross = compute_gross(net_amount, vat_rate)
+
+        item = self._repo.create_item(
+            contract_id=contract_id,
+            subscription_id=subscription_id,
+            item_type=PaymentPlanItemType.ADJUSTMENT,
+            billing_month=month_bucket,
+            period_start=period_start,
+            period_end=period_end,
+            amount_net=float(net_amount),
+            vat_rate=float(vat_rate),
+            amount_gross=float(gross),
+            currency=currency,
+            description=description or "Korekta",
+            idempotency_key=_make_idempotency_key(
+                "adjustment",
+                contract_id,
+                subscription_id,
+                month_bucket,
+                period_start,
+                period_end,
+                net_amount,
+                vat_rate,
+                *(idempotency_key_parts or ()),
             ),
         )
         return item.id

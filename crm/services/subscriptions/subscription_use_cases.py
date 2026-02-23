@@ -149,6 +149,95 @@ def generate_monthly_recurring(
         )
 
 
+def upgrade_immediate(
+    db: Session,
+    *,
+    subscription_id: int,
+    upgraded_at: datetime,
+    new_tariff_code: str,
+    old_monthly_net: Decimal,
+    new_monthly_net: Decimal,
+    vat_rate: Decimal = Decimal("23.00"),
+    currency: str = "PLN",
+    note: str | None = None,
+    requested_by_staff_user_id: Optional[int] = None,
+) -> dict[str, int | None]:
+    """Upgrade natychmiast (v1): zmiana taryfy + prorata różnicy + zapis change_request jako applied.
+
+    To jest świadomie prosty silnik, żeby nie zrobić „kalkulatora z piekła”.
+    Dopóki nie ma price schedule, ceny są podawane jawnie (old/new_monthly_net).
+    """
+    repo = SubscriptionRepository(db)
+    sub = repo.get(subscription_id)
+    if sub is None:
+        raise SubscriptionUseCaseError(f"Subscription not found: {subscription_id}")
+
+    if sub.status != "active":
+        raise SubscriptionUseCaseError(
+            f"Subscription must be active to upgrade (id={subscription_id}, status={sub.status})"
+        )
+
+    if not new_tariff_code:
+        raise SubscriptionUseCaseError("new_tariff_code is required")
+
+    # 1) zapisujemy change_request, ale od razu applied (upgrade natychmiast)
+    req = repo.create_change_request(
+        subscription_id=sub.id,
+        change_type=SubscriptionChangeType.UPGRADE,
+        effective_at=upgraded_at.date(),
+        requested_by_staff_user_id=requested_by_staff_user_id,
+        note=note,
+        payload={
+            "new_tariff_code": new_tariff_code,
+            "old_monthly_net": str(old_monthly_net),
+            "new_monthly_net": str(new_monthly_net),
+        },
+    )
+    req.status = "applied"
+    req.updated_at = upgraded_at
+
+    # 2) aktualizujemy subskrypcję
+    sub.tariff_code = new_tariff_code
+    sub.updated_at = upgraded_at
+
+    # 3) snapshot wersji (minimalny)
+    next_ver = repo.get_latest_version_no(sub.id) + 1
+    repo.add_version(
+        subscription_id=sub.id,
+        version_no=next_ver,
+        snapshot={
+            "type": sub.type,
+            "product_code": sub.product_code,
+            "tariff_code": sub.tariff_code,
+            "quantity": sub.quantity,
+            "billing_period_months": sub.billing_period_months,
+            "service_address_id": sub.service_address_id,
+            "provisioning": sub.provisioning,
+            "changed_at": upgraded_at.isoformat(),
+            "change_type": "upgrade_immediate",
+            "old_monthly_net": str(old_monthly_net),
+            "new_monthly_net": str(new_monthly_net),
+        },
+        created_by_staff_id=requested_by_staff_user_id,
+    )
+
+    # 4) generujemy prorata różnicy (jako ADJUSTMENT) od dzisiaj do końca miesiąca
+    pp = PaymentPlanService(db)
+    item_id = pp.add_prorata_price_difference(
+        contract_id=sub.contract_id,
+        subscription_id=sub.id,
+        changed_at=upgraded_at,
+        old_monthly_net=old_monthly_net,
+        new_monthly_net=new_monthly_net,
+        vat_rate=vat_rate,
+        currency=currency,
+        description="Dopłata za upgrade (prorata różnicy)",
+    )
+
+    db.flush()
+    return {"change_request_id": req.id, "payment_plan_item_id": item_id}
+
+
 def schedule_downgrade(
     db: Session,
     *,
@@ -216,7 +305,8 @@ def apply_due_change_requests(db: Session, *, now: datetime | date | None = None
         sub = repo.get(req.subscription_id)
         if sub is None:
             # dangling FK raczej nie powinno się zdarzyć, ale nie blokujemy kolejki
-            req.status = SubscriptionChangeType.TERMINATE  # type: ignore[assignment]
+            req.status = "rejected"
+            req.updated_at = now_dt
             continue
 
         ct = req.change_type
@@ -248,4 +338,3 @@ def apply_due_change_requests(db: Session, *, now: datetime | date | None = None
 
     db.flush()
     return applied
-
