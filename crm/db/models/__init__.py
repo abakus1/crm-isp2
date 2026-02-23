@@ -14,3 +14,13 @@ from crm.db.models.subscriptions import (  # noqa: F401
     SubscriptionChangeRequest,
     SubscriptionVersion,
 )
+
+from .service_catalog import (
+    ServiceFamily,
+    ContractTerm,
+    ServicePlan,
+    ServicePlanMonthPrice,
+    ServicePlanPostTermPolicy,
+    ServicePlanRequirement,
+    ServicePlanDependency,
+)

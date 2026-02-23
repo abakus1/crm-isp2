@@ -3,10 +3,12 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Optional
 
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from crm.domains.pricing.repositories import CatalogRepository, CatalogProductRequirementRepository
 from crm.db.models.pricing import CatalogProduct
+from crm.db.models.service_catalog import ServicePlanRequirement
+from crm.domains.pricing.repositories import CatalogRepository, CatalogProductRequirementRepository
 from crm.domains.subscriptions.repositories import SubscriptionRepository
 from crm.shared.errors import ValidationError
 
@@ -23,9 +25,9 @@ class RequirementViolation:
 class SubscriptionService:
     """Logika domenowa subskrypcji (bez HTTP).
 
-    validate_requirements() jest celowo "nudne":
-    - źródło prawdy: DB + katalog
-    - żadnych if-ów w stylu "internet wymaga ont" w kodzie
+    Mamy dwie warstwy walidacji wymagań:
+    1) validate_requirements(contract_id)  -> legacy (oparte o CatalogProductRequirement)
+    2) validate_plan_requirements(...)    -> NOWE (oparte o ServicePlanRequirement: plan->addon)
     """
 
     def __init__(self, db: Session) -> None:
@@ -34,6 +36,42 @@ class SubscriptionService:
         self._catalog = CatalogRepository(db)
         self._reqs = CatalogProductRequirementRepository(db)
 
+    # =====================================================
+    # NOWE: walidacja requirements na poziomie planów usług
+    # =====================================================
+    def validate_plan_requirements(
+        self,
+        *,
+        primary_plan_id: int,
+        selected_addon_plan_ids: list[int],
+    ) -> None:
+        """Wymusza: nie zamówisz primary bez wymaganych addonów (ONT/STB/IP).
+
+        Źródło prawdy: crm.service_plan_requirements
+        - required_plan_id = addon plan
+        """
+        selected_set = {int(x) for x in (selected_addon_plan_ids or [])}
+
+        stmt = select(ServicePlanRequirement.required_plan_id).where(ServicePlanRequirement.service_plan_id == int(primary_plan_id))
+        required_ids = [int(rid) for rid in self._db.execute(stmt).scalars().all()]
+
+        if not required_ids:
+            return
+
+        missing = sorted(set(required_ids) - selected_set)
+        if missing:
+            raise ValidationError(
+                message="Brakuje wymaganych addonów dla wybranej usługi głównej.",
+                details={
+                    "primary_plan_id": int(primary_plan_id),
+                    "missing_required_plan_ids": missing,
+                    "selected_addon_plan_ids": sorted(selected_set),
+                },
+            )
+
+    # =====================================================
+    # LEGACY: walidacja na poziomie produktów katalogowych
+    # =====================================================
     def validate_requirements(self, *, contract_id: int) -> None:
         subs = self._subs.list_for_contract(contract_id, limit=1000, offset=0)
 
@@ -99,7 +137,6 @@ class SubscriptionService:
         for primary in root_primary:
             primary_product = self._catalog.get_product_by_code(primary.product_code)
             if not primary_product:
-                # brak produktu w katalogu -> to jest błąd danych, ale lepiej komunikat domenowy
                 raise ValidationError(
                     message=f"Brak produktu w katalogu dla product_code={primary.product_code} (subscription {primary.id}).",
                     details={
@@ -132,7 +169,6 @@ class SubscriptionService:
                 min_qty = int(r.min_qty or 0)
                 max_qty = int(r.max_qty) if r.max_qty is not None else None
 
-                # min_qty=0 -> opcjonalne; nadal można mieć max_qty
                 if found < min_qty:
                     required_product = self._db.get(CatalogProduct, int(r.required_product_id))
                     req_code = getattr(required_product, "code", str(r.required_product_id))
