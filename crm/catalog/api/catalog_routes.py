@@ -58,7 +58,8 @@ def _product_out(p: CatalogProduct) -> CatalogProductOut:
     return CatalogProductOut(
         id=int(p.id),
         code=str(p.code),
-        type=str(p.type),
+        # UI/API field is "type" but DB column is "product_type"
+        type=str(p.product_type),
         name=str(p.name),
         is_active=bool(p.is_active),
         created_at=p.created_at,
@@ -87,7 +88,7 @@ def catalog_products_list(
     db: Session = Depends(get_db),
     _me: StaffUser = Depends(require(Action.CATALOG_PRODUCTS_READ)),
 ):
-    stmt = select(CatalogProduct).order_by(CatalogProduct.type.asc(), CatalogProduct.code.asc())
+    stmt = select(CatalogProduct).order_by(CatalogProduct.product_type.asc(), CatalogProduct.code.asc())
     if not include_inactive:
         stmt = stmt.where(CatalogProduct.is_active.is_(True))
     rows = list(db.execute(stmt).scalars().all())
@@ -136,9 +137,9 @@ def catalog_requirements_create(
     if not primary or not required:
         raise HTTPException(status_code=404, detail="Nie znaleziono produktu primary lub required")
 
-    if str(primary.type) == "addon":
+    if str(primary.product_type) == "addon":
         raise HTTPException(status_code=400, detail="Primary product nie może być typu addon")
-    if str(required.type) != "addon":
+    if str(required.product_type) != "addon":
         raise HTTPException(status_code=400, detail="Required product musi być typu addon")
 
     if payload.max_qty is not None and payload.max_qty < payload.min_qty:

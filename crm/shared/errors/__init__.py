@@ -1,1 +1,1 @@
-from .domain import DomainError, ValidationError
+from .domains import DomainError, ValidationError

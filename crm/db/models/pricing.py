@@ -3,8 +3,19 @@ from __future__ import annotations
 
 from datetime import date, datetime
 
-from sqlalchemy import BigInteger, Boolean, Date, DateTime, ForeignKey, Identity, Integer, Numeric, String, Text, text
-from sqlalchemy.dialects.postgresql import ENUM, JSONB
+from sqlalchemy import (
+    BigInteger,
+    Boolean,
+    Date,
+    DateTime,
+    ForeignKey,
+    Identity,
+    Integer,
+    Numeric,
+    String,
+    text,
+)
+from sqlalchemy.dialects.postgresql import ENUM
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from crm.db.models.base import Base
@@ -13,6 +24,9 @@ from crm.db.models.base import Base
 SCHEMA = Base.metadata.schema or "crm"
 
 
+# NOTE:
+# DB schema for catalog/pricing is defined in alembic revision c53ec804a23c
+# (pricing_schedule_foundation). Keep ORM in sync with that migration.
 CatalogProductTypeDb = ENUM(
     "internet",
     "tv",
@@ -36,22 +50,29 @@ PriceScheduleSourceDb = ENUM(
 
 
 class CatalogProduct(Base):
-    """Katalog produktów (źródło prawdy dla product_code).
+    """Katalog produktów.
 
-    Uwaga: to jest minimalny fundament — nazwy/opisy/parametry techniczne dojdą później.
+    Zgodnie z DB (c53ec804a23c):
+      - id: int (autoincrement)
+      - code: str
+      - name: str
+      - product_type: ENUM
+      - is_active
+      - created_at/updated_at
+
+    Uwaga: NIE używamy pola "type" w DB (to była pomyłka); jest "product_type".
     """
 
     __tablename__ = "catalog_products"
 
-    id: Mapped[int] = mapped_column(BigInteger, Identity(), primary_key=True)
+    id: Mapped[int] = mapped_column(Integer, Identity(), primary_key=True)
 
-    code: Mapped[str] = mapped_column(String(80), nullable=False, unique=True, index=True)
-    type: Mapped[str] = mapped_column(CatalogProductTypeDb, nullable=False, index=True)
-    name: Mapped[str] = mapped_column(String(160), nullable=False)
+    code: Mapped[str] = mapped_column(String(64), nullable=False, unique=True, index=True)
+    name: Mapped[str] = mapped_column(String(255), nullable=False)
+
+    product_type: Mapped[str] = mapped_column(CatalogProductTypeDb, nullable=False, index=True)
 
     is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=text("true"))
-
-    meta: Mapped[dict] = mapped_column(JSONB, nullable=False, server_default=text("'{}'::jsonb"))
 
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=text("now()"))
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=text("now()"))
@@ -65,14 +86,26 @@ class CatalogProduct(Base):
 
 
 class CatalogPriceScheduleEvent(Base):
-    """Zdarzenie zmiany ceny w katalogu od wskazanego miesiąca (pierwszy dzień miesiąca)."""
+    """Zdarzenie ceny w katalogu od wskazanego miesiąca (pierwszy dzień miesiąca).
+
+    Zgodnie z DB (c53ec804a23c):
+      - catalog_product_id
+      - effective_month
+      - monthly_price
+      - activation_fee
+      - source
+      - note
+      - created_at
+
+    (bez VAT/currency/meta/updated_at).
+    """
 
     __tablename__ = "catalog_price_schedule_events"
 
     id: Mapped[int] = mapped_column(BigInteger, Identity(), primary_key=True)
 
-    product_id: Mapped[int] = mapped_column(
-        BigInteger,
+    catalog_product_id: Mapped[int] = mapped_column(
+        Integer,
         ForeignKey(f"{SCHEMA}.catalog_products.id", ondelete="CASCADE"),
         nullable=False,
         index=True,
@@ -80,17 +113,18 @@ class CatalogPriceScheduleEvent(Base):
 
     effective_month: Mapped[date] = mapped_column(Date, nullable=False, index=True)
 
-    monthly_net: Mapped[float] = mapped_column(Numeric(10, 2), nullable=False)
-    vat_rate: Mapped[float] = mapped_column(Numeric(5, 2), nullable=False, server_default=text("23.00"))
-    currency: Mapped[str] = mapped_column(String(3), nullable=False, server_default=text("'PLN'"))
+    monthly_price: Mapped[float] = mapped_column(Numeric(12, 2), nullable=False)
+    activation_fee: Mapped[float | None] = mapped_column(Numeric(12, 2), nullable=True)
 
-    activation_fee_net: Mapped[float | None] = mapped_column(Numeric(10, 2), nullable=True)
+    source: Mapped[str] = mapped_column(
+        PriceScheduleSourceDb,
+        nullable=False,
+        server_default=text("'catalog'"),
+    )
 
-    note: Mapped[str | None] = mapped_column(Text, nullable=True)
-    meta: Mapped[dict] = mapped_column(JSONB, nullable=False, server_default=text("'{}'::jsonb"))
+    note: Mapped[str | None] = mapped_column(String(255), nullable=True)
 
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=text("now()"))
-    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=text("now()"))
 
     product: Mapped[CatalogProduct] = relationship(back_populates="price_events")
 
@@ -98,8 +132,9 @@ class CatalogPriceScheduleEvent(Base):
 class SubscriptionPriceScheduleEvent(Base):
     """Snapshot harmonogramu cen per subskrypcja.
 
-    To jest jedyne źródło ceny dla billing engine. Powstaje przy podpisaniu/aktywacji
-    (albo aneksie) na bazie katalogu + polityk kontraktu.
+    To jest jedyne źródło ceny dla billing engine.
+
+    (Ta tabela jest w tej samej migracji, ale model może być rozwijany dalej.)
     """
 
     __tablename__ = "subscription_price_schedule_events"
@@ -118,25 +153,14 @@ class SubscriptionPriceScheduleEvent(Base):
     # zawsze pierwszy dzień miesiąca
     effective_month: Mapped[date] = mapped_column(Date, nullable=False, index=True)
 
-    monthly_net: Mapped[float] = mapped_column(Numeric(10, 2), nullable=False)
-    vat_rate: Mapped[float] = mapped_column(Numeric(5, 2), nullable=False, server_default=text("23.00"))
-    currency: Mapped[str] = mapped_column(String(3), nullable=False, server_default=text("'PLN'"))
-
-    note: Mapped[str | None] = mapped_column(Text, nullable=True)
-    meta: Mapped[dict] = mapped_column(JSONB, nullable=False, server_default=text("'{}'::jsonb"))
+    monthly_price: Mapped[float] = mapped_column(Numeric(12, 2), nullable=False)
+    activation_fee: Mapped[float | None] = mapped_column(Numeric(12, 2), nullable=True)
 
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=text("now()"))
-    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=text("now()"))
 
 
 class CatalogProductRequirement(Base):
-    """Zależności katalogowe: primary produkt wymaga (lub opcjonalnie dopuszcza) dodatki.
-
-    Przykład:
-      Internet -> wymaga ONT (is_hard_required=true)
-      TV -> wymaga STB (is_hard_required=true)
-      Internet -> może mieć Public IP (is_hard_required=false, min_qty=0)
-    """
+    """Zależności katalogowe: primary produkt wymaga (lub opcjonalnie dopuszcza) dodatki."""
 
     __tablename__ = "catalog_product_requirements"
 
@@ -172,4 +196,3 @@ class CatalogProductRequirement(Base):
         "CatalogProduct",
         foreign_keys=[required_product_id],
     )
-
