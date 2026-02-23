@@ -13,6 +13,8 @@ from crm.core.audit.activity_middleware import ActivityLogMiddleware
 
 from crm.users.module import register as register_users
 from crm.prg.module import register as register_prg
+from crm.catalog.module import register as register_catalog
+from crm.contracts.module import register as register_contracts
 
 from crm.app.config import get_settings
 from crm.users.identity.jwt_deps import get_claims
@@ -65,6 +67,8 @@ def create_app() -> FastAPI:
 
     register_users(app)
     register_prg(app)
+    register_catalog(app)
+    register_contracts(app)
 
     # --- Request context (ip/user-agent/request-id) ---
     @app.middleware("http")

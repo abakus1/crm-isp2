@@ -63,3 +63,8 @@ class Action(str, Enum):
     PRG_LOCAL_POINT_DELETE = "prg.local_point.delete"
     PRG_LOCAL_POINT_APPROVE = "prg.local_point.approve"
     PRG_RECONCILE_RUN = "prg.reconcile.run"
+
+    # Catalog / pricing config
+    CATALOG_PRODUCTS_READ = "catalog.products.read"
+    CATALOG_REQUIREMENTS_READ = "catalog.requirements.read"
+    CATALOG_REQUIREMENTS_WRITE = "catalog.requirements.write"
