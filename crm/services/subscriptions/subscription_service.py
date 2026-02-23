@@ -52,7 +52,9 @@ class SubscriptionService:
         """
         selected_set = {int(x) for x in (selected_addon_plan_ids or [])}
 
-        stmt = select(ServicePlanRequirement.required_plan_id).where(ServicePlanRequirement.service_plan_id == int(primary_plan_id))
+        stmt = select(ServicePlanRequirement.required_plan_id).where(
+            ServicePlanRequirement.service_plan_id == int(primary_plan_id)
+        )
         required_ids = [int(rid) for rid in self._db.execute(stmt).scalars().all()]
 
         if not required_ids:
@@ -68,6 +70,26 @@ class SubscriptionService:
                     "selected_addon_plan_ids": sorted(selected_set),
                 },
             )
+
+    # -----------------------------------------------------
+    # NOWE: czytelny alias pod use-case (enforcement)
+    # -----------------------------------------------------
+    def enforce_plan_requirements(
+        self,
+        *,
+        primary_plan_id: int,
+        selected_addon_plan_ids: list[int],
+    ) -> None:
+        """Alias dla validate_plan_requirements().
+
+        Ten wrapper ma jeden cel: w use-case tworzenia zamówienia/subskrypcji
+        wywołanie ma brzmieć jak "blokada zapisu wg konfiguracji katalogu",
+        a nie jak "walidacja pomocnicza".
+        """
+        self.validate_plan_requirements(
+            primary_plan_id=int(primary_plan_id),
+            selected_addon_plan_ids=[int(x) for x in (selected_addon_plan_ids or [])],
+        )
 
     # =====================================================
     # LEGACY: walidacja na poziomie produktów katalogowych
@@ -91,7 +113,10 @@ class SubscriptionService:
             parent = by_id.get(int(s.parent_subscription_id))
             if not parent:
                 raise ValidationError(
-                    message=f"Addon subscription {s.id} ma parent_subscription_id={s.parent_subscription_id}, ale parent nie istnieje w tym kontrakcie.",
+                    message=(
+                        f"Addon subscription {s.id} ma parent_subscription_id={s.parent_subscription_id}, "
+                        "ale parent nie istnieje w tym kontrakcie."
+                    ),
                     details={
                         "subscription_id": int(s.id),
                         "parent_subscription_id": int(s.parent_subscription_id),
@@ -123,7 +148,9 @@ class SubscriptionService:
 
             if parent.parent_subscription_id is not None:
                 raise ValidationError(
-                    message=f"Addon subscription {s.id} wskazuje parent, który sam jest addonem (parent_subscription_id != NULL).",
+                    message=(
+                        f"Addon subscription {s.id} wskazuje parent, który sam jest addonem (parent_subscription_id != NULL)."
+                    ),
                     details={
                         "subscription_id": int(s.id),
                         "parent_subscription_id": int(s.parent_subscription_id),
@@ -187,7 +214,8 @@ class SubscriptionService:
                     req_code = getattr(required_product, "code", str(r.required_product_id))
                     raise ValidationError(
                         message=(
-                            f"Dla primary subscription {primary.id} ilość dodatku {req_code} przekracza max_qty={max_qty} (found={found})."
+                            f"Dla primary subscription {primary.id} ilość dodatku {req_code} "
+                            f"przekracza max_qty={max_qty} (found={found})."
                         ),
                         details={
                             "primary_subscription_id": int(primary.id),
