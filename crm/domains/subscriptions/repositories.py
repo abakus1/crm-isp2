@@ -45,6 +45,8 @@ class SubscriptionRepository:
         tariff_code: Optional[str] = None,
         quantity: int = 1,
         billing_period_months: int = 1,
+        is_primary: Optional[bool] = None,
+        parent_subscription_id: Optional[int] = None,
         service_address_id: Optional[int] = None,
         provisioning: Optional[dict[str, Any]] = None,
     ) -> Subscription:
@@ -55,6 +57,8 @@ class SubscriptionRepository:
             tariff_code=tariff_code,
             quantity=quantity,
             billing_period_months=billing_period_months,
+            is_primary=(is_primary if is_primary is not None else (type != 'addon')),
+            parent_subscription_id=parent_subscription_id,
             service_address_id=service_address_id,
             provisioning=provisioning,
         )

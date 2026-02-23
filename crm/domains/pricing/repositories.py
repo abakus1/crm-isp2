@@ -7,7 +7,7 @@ from decimal import Decimal
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from crm.db.models.pricing import CatalogPriceScheduleEvent, CatalogProduct, SubscriptionPriceScheduleEvent
+from crm.db.models.pricing import CatalogPriceScheduleEvent, CatalogProduct, CatalogProductRequirement, SubscriptionPriceScheduleEvent
 
 
 @dataclass(frozen=True)
@@ -133,3 +133,17 @@ class SubscriptionPriceScheduleRepository:
             currency=e.currency,
             source=str(e.source),
         )
+
+
+class CatalogProductRequirementRepository:
+    def __init__(self, db: Session) -> None:
+        self._db = db
+
+    def list_for_primary_product(self, primary_product_id: int) -> list[CatalogProductRequirement]:
+        stmt = (
+            select(CatalogProductRequirement)
+            .where(CatalogProductRequirement.primary_product_id == primary_product_id)
+            .order_by(CatalogProductRequirement.id.asc())
+        )
+        return list(self._db.execute(stmt).scalars().all())
+

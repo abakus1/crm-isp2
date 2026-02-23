@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from datetime import date, datetime
 
-from sqlalchemy import BigInteger, Date, DateTime, ForeignKey, Identity, Integer, Numeric, String, Text, text
+from sqlalchemy import BigInteger, Boolean, Date, DateTime, ForeignKey, Identity, Integer, Numeric, String, Text, text
 from sqlalchemy.dialects.postgresql import ENUM, JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -72,7 +72,30 @@ class Subscription(Base):
     )
 
     type: Mapped[str] = mapped_column(SubscriptionTypeDb, nullable=False, index=True)
-    status: Mapped[str] = mapped_column(SubscriptionStatusDb, nullable=False, server_default=text("'pending'"), index=True)
+    status: Mapped[str] = mapped_column(
+        SubscriptionStatusDb,
+        nullable=False,
+        server_default=text("'pending'"),
+        index=True,
+    )
+
+    # "Zakładka Usługi": źródło prawdy dla główna vs dodatkowa
+    is_primary: Mapped[bool] = mapped_column(
+        Boolean,
+        nullable=False,
+        server_default=text("true"),
+        index=True,
+    )
+
+    # Addony przypięte do konkretnej głównej subskrypcji (root primary ma NULL)
+    parent_subscription_id: Mapped[int | None] = mapped_column(
+        BigInteger,
+        ForeignKey(f"{SCHEMA}.subscriptions.id", ondelete="CASCADE"),
+        nullable=True,
+        index=True,
+    )
+
+
 
     product_code: Mapped[str | None] = mapped_column(String(80), nullable=True)
     tariff_code: Mapped[str | None] = mapped_column(String(80), nullable=True)
@@ -94,6 +117,20 @@ class Subscription(Base):
 
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=text("now()"))
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=text("now()"))
+
+    parent: Mapped["Subscription | None"] = relationship(
+        "Subscription",
+        remote_side="Subscription.id",
+        back_populates="children",
+        foreign_keys="Subscription.parent_subscription_id",
+    )
+
+    children: Mapped[list["Subscription"]] = relationship(
+        "Subscription",
+        back_populates="parent",
+        cascade="all, delete-orphan",
+        foreign_keys="Subscription.parent_subscription_id",
+    )
 
     versions: Mapped[list["SubscriptionVersion"]] = relationship(
         back_populates="subscription",

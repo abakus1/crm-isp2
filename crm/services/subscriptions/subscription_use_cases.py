@@ -27,6 +27,8 @@ class NewSubscriptionSpec:
     tariff_code: Optional[str] = None
     quantity: int = 1
     billing_period_months: int = 1
+    is_primary: Optional[bool] = None
+    parent_subscription_id: Optional[int] = None
     service_address_id: Optional[int] = None
     provisioning: Optional[dict[str, Any]] = None
 
@@ -48,6 +50,8 @@ def create_subscriptions_from_contract(
             tariff_code=spec.tariff_code,
             quantity=spec.quantity,
             billing_period_months=spec.billing_period_months,
+            is_primary=spec.is_primary,
+            parent_subscription_id=spec.parent_subscription_id,
             service_address_id=spec.service_address_id,
             provisioning=spec.provisioning,
         )
