@@ -1,9 +1,9 @@
 # crm/db/models/subscriptions.py
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import date, datetime
 
-from sqlalchemy import BigInteger, DateTime, ForeignKey, Identity, Integer, Numeric, String, text
+from sqlalchemy import BigInteger, Date, DateTime, ForeignKey, Identity, Integer, Numeric, String, Text, text
 from sqlalchemy.dialects.postgresql import ENUM, JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -140,17 +140,26 @@ class SubscriptionChangeRequest(Base):
     )
 
     change_type: Mapped[str] = mapped_column(SubscriptionChangeTypeDb, nullable=False, index=True)
-    status: Mapped[str] = mapped_column(SubscriptionChangeStatusDb, nullable=False, server_default=text("'pending'"), index=True)
-    effective_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    status: Mapped[str] = mapped_column(
+        SubscriptionChangeStatusDb,
+        nullable=False,
+        server_default=text("'pending'"),
+        index=True,
+    )
 
-    requested_by_staff_id: Mapped[int | None] = mapped_column(
+    # W DB (f252a783382a) to Date (bez TZ) — zmiany wchodzą o 00:00 logiką aplikacji.
+    effective_at: Mapped[date] = mapped_column(Date, nullable=False, index=True)
+
+    # Uwaga na nazwę kolumny w DB: requested_by_staff_user_id
+    requested_by_staff_user_id: Mapped[int | None] = mapped_column(
         BigInteger,
         ForeignKey(f"{SCHEMA}.staff_users.id", ondelete="SET NULL"),
         nullable=True,
     )
 
-    reason: Mapped[str | None] = mapped_column(String(255), nullable=True)
-    payload: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+    # W DB jest note + payload (payload default {}::jsonb)
+    note: Mapped[str | None] = mapped_column(Text, nullable=True)
+    payload: Mapped[dict] = mapped_column(JSONB, nullable=False, server_default=text("'{}'::jsonb"))
 
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=text("now()"))
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=text("now()"))

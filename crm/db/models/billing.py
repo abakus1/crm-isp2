@@ -3,8 +3,8 @@ from __future__ import annotations
 
 from datetime import date, datetime
 
-from sqlalchemy import BigInteger, Date, DateTime, ForeignKey, Identity, Numeric, String, text
-from sqlalchemy.dialects.postgresql import ENUM, JSONB
+from sqlalchemy import BigInteger, Date, DateTime, ForeignKey, Identity, Numeric, String, Text, text
+from sqlalchemy.dialects.postgresql import ENUM, JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
 from crm.db.models.base import Base
@@ -56,17 +56,23 @@ class PaymentPlanItem(Base):
     item_type: Mapped[str] = mapped_column(PaymentPlanItemTypeDb, nullable=False, index=True)
     status: Mapped[str] = mapped_column(PaymentPlanItemStatusDb, nullable=False, server_default=text("'planned'"), index=True)
 
+    # „miesiąc fakturowania” jako pierwszy dzień miesiąca (bucket)
     billing_month: Mapped[date] = mapped_column(Date, nullable=False, index=True)
-    period_start: Mapped[date | None] = mapped_column(Date, nullable=True)
-    period_end: Mapped[date | None] = mapped_column(Date, nullable=True)
 
-    description: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    # okres świadczenia/usługi (dla proraty może być część miesiąca)
+    period_start: Mapped[date] = mapped_column(Date, nullable=False)
+    period_end: Mapped[date] = mapped_column(Date, nullable=False)
+
+    description: Mapped[str | None] = mapped_column(Text, nullable=True)
     currency: Mapped[str] = mapped_column(String(3), nullable=False, server_default=text("'PLN'"))
-    net_amount: Mapped[float] = mapped_column(Numeric(12, 2), nullable=False)
-    vat_rate: Mapped[float] = mapped_column(Numeric(5, 2), nullable=False, server_default=text("23.00"))
-    gross_amount: Mapped[float] = mapped_column(Numeric(12, 2), nullable=False)
 
-    meta: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+    # Nazwy pól zgodne z migracją (f252a783382a)
+    amount_net: Mapped[float] = mapped_column(Numeric(12, 2), nullable=False)
+    vat_rate: Mapped[float] = mapped_column(Numeric(5, 2), nullable=False, server_default=text("0.00"))
+    amount_gross: Mapped[float] = mapped_column(Numeric(12, 2), nullable=False)
+
+    # meta do integracji księgowej później (Optima/KSeF)
+    external_document_id: Mapped[str | None] = mapped_column(String(128), nullable=True)
 
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=text("now()"))
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=text("now()"))
@@ -94,8 +100,8 @@ class AccountAccess(Base):
         index=True,
     )
 
-    # Placeholder for future client identity module.
-    identity_user_id: Mapped[str | None] = mapped_column(String(36), nullable=True, unique=True)
+    # Placeholder for future client identity module (UUID).
+    identity_user_id: Mapped[str | None] = mapped_column(UUID(as_uuid=True), nullable=True, unique=True)
     status: Mapped[str] = mapped_column(AccountAccessStatusDb, nullable=False, server_default=text("'pending'"))
 
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=text("now()"))

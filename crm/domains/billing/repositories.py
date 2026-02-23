@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from datetime import date
-from typing import Any, Optional
+from typing import Optional
 
 import sqlalchemy as sa
 from sqlalchemy.orm import Session
@@ -49,15 +49,17 @@ class PaymentPlanRepository:
         subscription_id: Optional[int],
         item_type: str,
         billing_month: date,
-        net_amount: float,
-        gross_amount: float,
-        vat_rate: float = 23.0,
+        amount_net: float,
+        amount_gross: float,
+        vat_rate: float = 0.0,
         currency: str = "PLN",
-        period_start: Optional[date] = None,
-        period_end: Optional[date] = None,
+        period_start: date = None,  # type: ignore[assignment]
+        period_end: date = None,  # type: ignore[assignment]
         description: Optional[str] = None,
-        meta: Optional[dict[str, Any]] = None,
+        external_document_id: Optional[str] = None,
     ) -> PaymentPlanItem:
+        if period_start is None or period_end is None:
+            raise PaymentPlanRepoError("period_start i period_end są wymagane (DB constraint)")
         item = PaymentPlanItem(
             contract_id=contract_id,
             subscription_id=subscription_id,
@@ -67,10 +69,10 @@ class PaymentPlanRepository:
             period_end=period_end,
             description=description,
             currency=currency,
-            net_amount=net_amount,
+            amount_net=amount_net,
             vat_rate=vat_rate,
-            gross_amount=gross_amount,
-            meta=meta,
+            amount_gross=amount_gross,
+            external_document_id=external_document_id,
         )
         self._db.add(item)
         self._db.flush()

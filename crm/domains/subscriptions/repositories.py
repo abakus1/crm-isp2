@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import date
 from typing import Any, Optional
 
 import sqlalchemy as sa
@@ -88,18 +88,18 @@ class SubscriptionRepository:
         *,
         subscription_id: int,
         change_type: str,
-        effective_at: datetime,
-        requested_by_staff_id: Optional[int] = None,
-        reason: Optional[str] = None,
+        effective_at: date,
+        requested_by_staff_user_id: Optional[int] = None,
+        note: Optional[str] = None,
         payload: Optional[dict[str, Any]] = None,
     ) -> SubscriptionChangeRequest:
         req = SubscriptionChangeRequest(
             subscription_id=subscription_id,
             change_type=change_type,
             effective_at=effective_at,
-            requested_by_staff_id=requested_by_staff_id,
-            reason=reason,
-            payload=payload,
+            requested_by_staff_user_id=requested_by_staff_user_id,
+            note=note,
+            payload=payload or {},
         )
         self._db.add(req)
         self._db.flush()
