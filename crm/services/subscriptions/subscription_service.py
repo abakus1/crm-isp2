@@ -45,10 +45,10 @@ class SubscriptionService:
         primary_plan_id: int,
         selected_addon_plan_ids: list[int],
     ) -> None:
-        """Wymusza: nie zamówisz primary bez wymaganych addonów (ONT/STB/IP).
+        """Wymusza: nie zamówisz usługi głównej bez addonów oznaczonych jako wymagane.
 
-        Źródło prawdy: crm.service_plan_requirements
-        - required_plan_id = addon plan
+        Źródło prawdy: crm.service_plan_requirements.
+        Backend niczego nie hard-coduje — egzekwuje wyłącznie konfigurację z katalogu usług.
         """
         selected_set = {int(x) for x in (selected_addon_plan_ids or [])}
 
@@ -61,7 +61,7 @@ class SubscriptionService:
         missing = sorted(set(required_ids) - selected_set)
         if missing:
             raise ValidationError(
-                message="Brakuje wymaganych addonów dla wybranej usługi głównej.",
+                message="Brakuje wymaganych addonów dla wybranej usługi głównej (wg konfiguracji katalogu).",
                 details={
                     "primary_plan_id": int(primary_plan_id),
                     "missing_required_plan_ids": missing,
