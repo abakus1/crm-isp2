@@ -4,6 +4,7 @@ from datetime import date
 from typing import Optional
 
 import sqlalchemy as sa
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from crm.db.models.billing import PaymentPlanItem
@@ -57,6 +58,7 @@ class PaymentPlanRepository:
         period_end: date = None,  # type: ignore[assignment]
         description: Optional[str] = None,
         external_document_id: Optional[str] = None,
+        idempotency_key: Optional[str] = None,
     ) -> PaymentPlanItem:
         if period_start is None or period_end is None:
             raise PaymentPlanRepoError("period_start i period_end są wymagane (DB constraint)")
@@ -73,7 +75,12 @@ class PaymentPlanRepository:
             vat_rate=vat_rate,
             amount_gross=amount_gross,
             external_document_id=external_document_id,
+            idempotency_key=idempotency_key,
         )
         self._db.add(item)
-        self._db.flush()
+        try:
+            self._db.flush()
+        except IntegrityError as e:
+            # Najczęstszy case: idempotency_key (unikalny indeks częściowy)
+            raise PaymentPlanRepoError(f"create_item failed (integrity): {e.orig}") from e
         return item

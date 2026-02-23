@@ -74,6 +74,9 @@ class PaymentPlanItem(Base):
     # meta do integracji księgowej później (Optima/KSeF)
     external_document_id: Mapped[str | None] = mapped_column(String(128), nullable=True)
 
+    # idempotencja generatora (unikamy duplikatów) — unikalny indeks częściowy w migracji
+    idempotency_key: Mapped[str | None] = mapped_column(String(128), nullable=True)
+
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=text("now()"))
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=text("now()"))
 

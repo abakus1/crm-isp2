@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import hashlib
+
 from dataclasses import dataclass
 from datetime import date, datetime
 from decimal import Decimal, ROUND_HALF_UP
@@ -10,6 +12,16 @@ from sqlalchemy.orm import Session
 from crm.domains.billing.enums import PaymentPlanItemType
 from crm.domains.billing.repositories import PaymentPlanRepository
 from crm.services.billing.date_math import first_day_of_month, last_day_of_month
+
+def _make_idempotency_key(*parts: object) -> str:
+    """Deterministyczny klucz idempotencji.
+
+    Cel: generator może próbować „tworzyć w ciemno”, a DB utnie duplikat po tym kluczu.
+    Klucz ma być stabilny względem *znaczenia biznesowego* pozycji, a nie np. ID zewnętrznych.
+    """
+    raw = "|".join("" if p is None else str(p) for p in parts).encode("utf-8")
+    return hashlib.sha256(raw).hexdigest()
+
 
 
 def _q2(amount: Decimal) -> Decimal:
@@ -69,6 +81,15 @@ class PaymentPlanService:
             amount_gross=float(gross),
             currency=currency,
             description=description or "Opłata aktywacyjna",
+            idempotency_key=_make_idempotency_key(
+                "activation_fee",
+                contract_id,
+                subscription_id,
+                billing_month,
+                d,
+                net_amount,
+                vat_rate,
+            ),
         )
         return item.id
 
@@ -102,6 +123,16 @@ class PaymentPlanService:
             amount_gross=float(gross),
             currency=currency,
             description=description or "Prorata za aktywację",
+            idempotency_key=_make_idempotency_key(
+                "prorata_activation",
+                contract_id,
+                subscription_id,
+                billing_month,
+                start,
+                end,
+                monthly_net,
+                vat_rate,
+            ),
         )
         return item.id
 
@@ -133,5 +164,13 @@ class PaymentPlanService:
             amount_gross=float(gross),
             currency=currency,
             description=description or "Abonament miesięczny",
+            idempotency_key=_make_idempotency_key(
+                "recurring_monthly",
+                contract_id,
+                subscription_id,
+                month_bucket,
+                monthly_net,
+                vat_rate,
+            ),
         )
         return item.id

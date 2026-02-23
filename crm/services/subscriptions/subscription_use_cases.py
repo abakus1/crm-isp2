@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import date, datetime
+from datetime import date, datetime, time, timezone
 from decimal import Decimal
 from typing import Any, Iterable, Optional
 
@@ -191,3 +191,61 @@ def schedule_termination(
         payload=payload or {},
     )
     return req.id
+
+
+def apply_due_change_requests(db: Session, *, now: datetime | date | None = None, limit: int = 500) -> int:
+    """Applier: pending -> applied.
+
+    Minimalny mechanizm, żeby change requesty nie były tylko „papierem w segregatorze”.
+    Docelowo: każdy typ zmiany będzie miał własne reguły + audit/outbox.
+    """
+    if now is None:
+        now_dt = datetime.now(tz=timezone.utc)
+    elif isinstance(now, datetime):
+        now_dt = now
+    else:
+        now_dt = datetime.combine(now, time.min, tzinfo=timezone.utc)
+
+    today = now_dt.date()
+    repo = SubscriptionRepository(db)
+
+    due = repo.list_due_pending_change_requests(now=today, limit=limit)
+    applied = 0
+
+    for req in due:
+        sub = repo.get(req.subscription_id)
+        if sub is None:
+            # dangling FK raczej nie powinno się zdarzyć, ale nie blokujemy kolejki
+            req.status = SubscriptionChangeType.TERMINATE  # type: ignore[assignment]
+            continue
+
+        ct = req.change_type
+
+        if ct in (SubscriptionChangeType.UPGRADE, SubscriptionChangeType.DOWNGRADE):
+            new_tariff = (req.payload or {}).get("new_tariff_code") or (req.payload or {}).get("tariff_code")
+            if not new_tariff:
+                raise SubscriptionUseCaseError(f"Missing new_tariff_code in payload for change_request={req.id}")
+            sub.tariff_code = str(new_tariff)
+
+        elif ct == SubscriptionChangeType.TERMINATE:
+            sub.status = "terminated"
+            sub.service_end_at = datetime.combine(req.effective_at, time.min, tzinfo=timezone.utc)
+
+        elif ct == SubscriptionChangeType.SUSPEND:
+            sub.status = "suspended"
+
+        elif ct == SubscriptionChangeType.RESUME:
+            # jeśli ktoś wznawia — przyjmujemy, że usługa jest aktywna
+            sub.status = "active"
+
+        else:
+            raise SubscriptionUseCaseError(f"Unsupported change_type={ct} for change_request={req.id}")
+
+        req.status = "applied"
+        sub.updated_at = now_dt
+        req.updated_at = now_dt
+        applied += 1
+
+    db.flush()
+    return applied
+

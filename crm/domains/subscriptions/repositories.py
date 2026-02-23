@@ -104,3 +104,20 @@ class SubscriptionRepository:
         self._db.add(req)
         self._db.flush()
         return req
+
+
+def list_due_pending_change_requests(self, *, now: date, limit: int = 500) -> list[SubscriptionChangeRequest]:
+    """Zwraca change requesty, które powinny już wejść w życie.
+
+    Używane przez applier (pending -> applied).
+    """
+    stmt = (
+        sa.select(SubscriptionChangeRequest)
+        .where(SubscriptionChangeRequest.status == "pending")
+        .where(SubscriptionChangeRequest.effective_at <= now)
+        .order_by(SubscriptionChangeRequest.effective_at.asc(), SubscriptionChangeRequest.id.asc())
+        .limit(limit)
+        .with_for_update(skip_locked=True)
+    )
+    return list(self._db.execute(stmt).scalars().all())
+
