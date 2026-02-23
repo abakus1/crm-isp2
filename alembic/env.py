@@ -13,6 +13,7 @@ sys.path.insert(0, str(ROOT))
 
 from crm.app.config import get_settings  # noqa: E402
 from crm.db.models.base import Base      # noqa: E402
+import crm.db.models  # noqa: E402,F401  # ensure models are registered on Base.metadata
 
 config = context.config
 
