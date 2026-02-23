@@ -15,7 +15,7 @@ from crm.domains.pricing.repositories import (
 from crm.services.billing.date_math import add_months, first_day_of_month
 
 
-PRIMARY_TYPES = {"internet", "tv", "voip"}
+# Primary (root) jest wyliczane z DB: is_primary=True AND parent_subscription_id IS NULL.
 
 
 def _q2(d: Decimal) -> Decimal:
@@ -80,7 +80,13 @@ class PriceScheduleBuilderService:
         """
 
         # 1) policz primary subs do rozdziału podwyżek
-        primary = [s for s in subscriptions if s.get("type") in PRIMARY_TYPES and s.get("product_code")]
+        primary = [
+            s
+            for s in subscriptions
+            if s.get("is_primary") is True
+            and s.get("parent_subscription_id") in (None, 0)
+            and s.get("product_code")
+        ]
         n_primary = len(primary)
 
         # 2) zbuduj bazę z katalogu per sub
