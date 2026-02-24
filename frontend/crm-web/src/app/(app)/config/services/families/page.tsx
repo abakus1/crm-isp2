@@ -5,7 +5,7 @@ import { useMemo, useState } from "react";
 
 import { EffectiveAtModal, EffectiveAtDecision } from "@/components/services/EffectiveAtModal";
 import { SimpleModal } from "@/components/SimpleModal";
-import { formatStatus, seedFamilies, ServiceFamily } from "@/lib/mockServicesConfig";
+import { formatStatus, seedFamilies, seedPlans, ServiceFamily } from "@/lib/mockServicesConfig";
 
 function uid(prefix: string) {
   return `${prefix}-${Math.random().toString(16).slice(2, 10)}`;
@@ -13,8 +13,16 @@ function uid(prefix: string) {
 
 export default function ServiceFamiliesPage() {
   const [rows, setRows] = useState<ServiceFamily[]>(seedFamilies());
+  const [plans] = useState(seedPlans());
+
   const [filterStatus, setFilterStatus] = useState<"all" | "active" | "archived">("active");
   const [q, setQ] = useState<string>("");
+
+  const attachedCountByFamily = useMemo(() => {
+    const m = new Map<string, number>();
+    for (const p of plans) m.set(p.familyId, (m.get(p.familyId) ?? 0) + 1);
+    return m;
+  }, [plans]);
 
   const view = useMemo(() => {
     const needle = q.trim().toLowerCase();
@@ -35,6 +43,9 @@ export default function ServiceFamiliesPage() {
 
   const [effectiveOpen, setEffectiveOpen] = useState(false);
   const [bulkAction, setBulkAction] = useState<"archive" | "restore" | null>(null);
+
+  const [deleteOpen, setDeleteOpen] = useState(false);
+  const [deleteId, setDeleteId] = useState<string | null>(null);
 
   function openNew() {
     setEditMode("new");
@@ -76,12 +87,27 @@ export default function ServiceFamiliesPage() {
     setSelected({});
   }
 
+  function requestDelete(id: string) {
+    setDeleteId(id);
+    setDeleteOpen(true);
+  }
+
+  function doDelete() {
+    if (!deleteId) return;
+    setRows((prev) => prev.filter((r) => r.id !== deleteId));
+    setDeleteOpen(false);
+    setDeleteId(null);
+  }
+
   return (
     <div className="p-6 space-y-4">
       <div className="flex items-start justify-between gap-3">
         <div>
           <div className="text-sm font-semibold">Konfiguracja → Usługi → Kategorie usług</div>
-          <div className="text-xs text-muted-foreground">CRUD + archiwum + planowanie zmian (ślepe UI).</div>
+          <div className="text-xs text-muted-foreground">
+            Zasada operatorska: brak podpiętych usług → można usuwać. Są podpięte usługi → tylko archiwizacja (żeby nie
+            rozwalić historii/sprzedaży).
+          </div>
         </div>
         <Link className="text-sm underline" href="/config/services">
           Wróć
@@ -111,10 +137,7 @@ export default function ServiceFamiliesPage() {
           </select>
         </div>
 
-        <button
-          className="ml-auto px-3 py-2 rounded-md bg-primary text-primary-foreground"
-          onClick={openNew}
-        >
+        <button className="ml-auto px-3 py-2 rounded-md bg-primary text-primary-foreground" onClick={openNew}>
           + Dodaj kategorię
         </button>
 
@@ -153,38 +176,61 @@ export default function ServiceFamiliesPage() {
               <th className="p-3 w-10"></th>
               <th className="p-3 text-left">Kod</th>
               <th className="p-3 text-left">Nazwa</th>
+              <th className="p-3 text-right">Usług</th>
               <th className="p-3 text-left">Status</th>
               <th className="p-3 text-left">Obowiązuje od</th>
               <th className="p-3 text-right">Akcje</th>
             </tr>
           </thead>
           <tbody>
-            {view.map((r) => (
-              <tr key={r.id} className="border-t">
-                <td className="p-3">
-                  <input
-                    type="checkbox"
-                    checked={!!selected[r.id]}
-                    onChange={(e) => setSelected((prev) => ({ ...prev, [r.id]: e.target.checked }))}
-                  />
-                </td>
-                <td className="p-3 font-mono text-xs">{r.code}</td>
-                <td className="p-3">
-                  <div className="font-medium">{r.name}</div>
-                  <div className="text-xs text-muted-foreground">{r.id}</div>
-                </td>
-                <td className="p-3">{formatStatus(r.status)}</td>
-                <td className="p-3">{r.effectiveFrom}</td>
-                <td className="p-3 text-right">
-                  <button className="px-3 py-1.5 rounded-md border" onClick={() => openEdit(r)}>
-                    Edytuj
-                  </button>
-                </td>
-              </tr>
-            ))}
+            {view.map((r) => {
+              const attached = attachedCountByFamily.get(r.id) ?? 0;
+              return (
+                <tr key={r.id} className="border-t">
+                  <td className="p-3">
+                    <input
+                      type="checkbox"
+                      checked={!!selected[r.id]}
+                      onChange={(e) => setSelected((prev) => ({ ...prev, [r.id]: e.target.checked }))}
+                    />
+                  </td>
+                  <td className="p-3 font-mono text-xs">{r.code}</td>
+                  <td className="p-3">
+                    <div className="font-medium">{r.name}</div>
+                    <div className="text-xs text-muted-foreground">{r.id}</div>
+                  </td>
+                  <td className="p-3 text-right tabular-nums">{attached}</td>
+                  <td className="p-3">{formatStatus(r.status)}</td>
+                  <td className="p-3">{r.effectiveFrom}</td>
+                  <td className="p-3 text-right">
+                    <div className="flex justify-end gap-2">
+                      <button className="px-3 py-1.5 rounded-md border" onClick={() => openEdit(r)}>
+                        Edytuj
+                      </button>
+                      {attached === 0 ? (
+                        <button
+                          className="px-3 py-1.5 rounded-md border"
+                          onClick={() => requestDelete(r.id)}
+                          title="Brak podpiętych usług — można skasować."
+                        >
+                          Usuń
+                        </button>
+                      ) : (
+                        <span
+                          className="px-3 py-1.5 rounded-md bg-muted/40 text-muted-foreground"
+                          title="Są podpięte usługi — usuwamy tylko przez archiwizację (żeby nie skasować historii)."
+                        >
+                          Usuń (zabl.)
+                        </span>
+                      )}
+                    </div>
+                  </td>
+                </tr>
+              );
+            })}
             {view.length === 0 && (
               <tr>
-                <td colSpan={6} className="p-6 text-center text-muted-foreground">
+                <td colSpan={7} className="p-6 text-center text-muted-foreground">
                   Brak wyników
                 </td>
               </tr>
@@ -238,6 +284,28 @@ export default function ServiceFamiliesPage() {
           setBulkAction(null);
         }}
       />
+
+      <SimpleModal
+        open={deleteOpen}
+        title="Usuń kategorię usług"
+        description="Ta operacja jest dostępna tylko gdy kategoria nie ma podpiętych usług. Ślepe UI — tylko w pamięci."
+        onClose={() => setDeleteOpen(false)}
+        footer={
+          <div className="flex justify-end gap-2">
+            <button className="px-3 py-2 rounded-md border" onClick={() => setDeleteOpen(false)}>
+              Anuluj
+            </button>
+            <button className="px-3 py-2 rounded-md bg-destructive text-destructive-foreground" onClick={doDelete}>
+              Usuń
+            </button>
+          </div>
+        }
+      >
+        <div className="text-sm">
+          Usuwasz kategorię <span className="font-mono">{deleteId}</span>. Jeśli kiedyś będą tu podpięte usługi — zamiast
+          usuwać robimy archiwizację.
+        </div>
+      </SimpleModal>
     </div>
   );
 }

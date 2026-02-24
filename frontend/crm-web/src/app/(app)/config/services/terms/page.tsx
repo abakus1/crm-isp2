@@ -33,6 +33,8 @@ export default function ServiceTermsPage() {
   const [name, setName] = useState("");
   const [isIndef, setIsIndef] = useState(true);
   const [months, setMonths] = useState<string>("");
+  const [saleFrom, setSaleFrom] = useState<string>(new Date().toISOString().slice(0, 10));
+  const [saleTo, setSaleTo] = useState<string>("");
 
   const [effectiveOpen, setEffectiveOpen] = useState(false);
   const [bulkAction, setBulkAction] = useState<"archive" | "restore" | null>(null);
@@ -43,6 +45,8 @@ export default function ServiceTermsPage() {
     setName("");
     setIsIndef(true);
     setMonths("");
+    setSaleFrom(new Date().toISOString().slice(0, 10));
+    setSaleTo("");
     setEditOpen(true);
   }
 
@@ -52,6 +56,8 @@ export default function ServiceTermsPage() {
     setName(r.name);
     setIsIndef(r.termMonths === null);
     setMonths(r.termMonths === null ? "" : String(r.termMonths));
+    setSaleFrom(r.saleFrom);
+    setSaleTo(r.saleTo ?? "");
     setEditOpen(true);
   }
 
@@ -63,10 +69,24 @@ export default function ServiceTermsPage() {
     if (editMode === "new") {
       setRows((prev) => [
         ...prev,
-        { id: uid("term"), name: name.trim(), termMonths, status: "active", effectiveFrom: now },
+        {
+          id: uid("term"),
+          name: name.trim(),
+          termMonths,
+          status: "active",
+          effectiveFrom: now,
+          saleFrom: saleFrom.trim(),
+          saleTo: saleTo.trim() ? saleTo.trim() : null,
+        },
       ]);
     } else if (editId) {
-      setRows((prev) => prev.map((r) => (r.id === editId ? { ...r, name: name.trim(), termMonths } : r)));
+      setRows((prev) =>
+        prev.map((r) =>
+          r.id === editId
+            ? { ...r, name: name.trim(), termMonths, saleFrom: saleFrom.trim(), saleTo: saleTo.trim() ? saleTo.trim() : null }
+            : r
+        )
+      );
     }
 
     setEditOpen(false);
@@ -159,6 +179,7 @@ export default function ServiceTermsPage() {
               <th className="p-3 w-10"></th>
               <th className="p-3 text-left">Nazwa</th>
               <th className="p-3 text-left">Długość</th>
+              <th className="p-3 text-left">Sprzedaż (od–do)</th>
               <th className="p-3 text-left">Status</th>
               <th className="p-3 text-left">Obowiązuje od</th>
               <th className="p-3 text-right">Akcje</th>
@@ -179,6 +200,10 @@ export default function ServiceTermsPage() {
                   <div className="text-xs text-muted-foreground">{r.id}</div>
                 </td>
                 <td className="p-3">{r.termMonths === null ? "Bezterminowa" : `${r.termMonths} mies.`}</td>
+                <td className="p-3">
+                  <div className="tabular-nums">{r.saleFrom}</div>
+                  <div className="tabular-nums text-xs text-muted-foreground">{r.saleTo ?? "—"}</div>
+                </td>
                 <td className="p-3">{formatStatus(r.status)}</td>
                 <td className="p-3">{r.effectiveFrom}</td>
                 <td className="p-3 text-right">
@@ -190,7 +215,7 @@ export default function ServiceTermsPage() {
             ))}
             {view.length === 0 && (
               <tr>
-                <td colSpan={6} className="p-6 text-center text-muted-foreground">
+                <td colSpan={7} className="p-6 text-center text-muted-foreground">
                   Brak wyników
                 </td>
               </tr>
@@ -241,6 +266,33 @@ export default function ServiceTermsPage() {
                 />
               </div>
             )}
+          </div>
+
+          <div className="rounded-lg border p-3">
+            <div className="text-xs text-muted-foreground">Okno sprzedaży / użycia</div>
+            <div className="mt-2 grid grid-cols-1 md:grid-cols-2 gap-3">
+              <div>
+                <div className="text-[11px] text-muted-foreground">Od</div>
+                <input
+                  value={saleFrom}
+                  onChange={(e) => setSaleFrom(e.target.value)}
+                  className="mt-1 w-full rounded-md border px-3 py-2 text-sm"
+                  placeholder="YYYY-MM-DD"
+                />
+              </div>
+              <div>
+                <div className="text-[11px] text-muted-foreground">Do (opcjonalnie)</div>
+                <input
+                  value={saleTo}
+                  onChange={(e) => setSaleTo(e.target.value)}
+                  className="mt-1 w-full rounded-md border px-3 py-2 text-sm"
+                  placeholder="YYYY-MM-DD"
+                />
+              </div>
+            </div>
+            <div className="mt-2 text-[11px] text-muted-foreground">
+              Ta data będzie później użyta do blokowania sprzedaży nowych umów w UI handlowca.
+            </div>
           </div>
         </div>
       </SimpleModal>

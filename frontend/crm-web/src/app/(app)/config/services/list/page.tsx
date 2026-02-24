@@ -24,6 +24,9 @@ type ServiceRow = {
   subscribersCount: number;
   effectiveFrom: string;
   month1Price: number;
+  activationFee: number;
+  saleFrom: string;
+  saleTo: string | null;
 };
 
 function Pill({ children }: { children: React.ReactNode }) {
@@ -57,7 +60,10 @@ export default function ServicesListPage() {
         status: p.status,
         subscribersCount: p.subscribersCount,
         effectiveFrom: p.effectiveFrom,
-        month1Price: p.month1Price,
+        month1Price: p.monthPrices?.[0] ?? 0,
+        activationFee: p.activationFee ?? 0,
+        saleFrom: p.saleFrom,
+        saleTo: p.saleTo ?? null,
       }))
       .filter((r) => (filterStatus === "all" ? true : r.status === filterStatus))
       .filter((r) => (filterType === "all" ? true : r.type === filterType))
@@ -172,6 +178,8 @@ export default function ServicesListPage() {
               <th className="p-3 text-left">Status</th>
               <th className="p-3 text-right">Subskrybenci</th>
               <th className="p-3 text-right">M1 (zł)</th>
+              <th className="p-3 text-right">Aktywacja (zł)</th>
+              <th className="p-3 text-left">Sprzedaż (od–do)</th>
               <th className="p-3 text-left">Obowiązuje od</th>
             </tr>
           </thead>
@@ -195,12 +203,17 @@ export default function ServicesListPage() {
                 <td className="p-3">{formatStatus(r.status)}</td>
                 <td className="p-3 text-right tabular-nums">{r.subscribersCount}</td>
                 <td className="p-3 text-right tabular-nums">{r.month1Price.toFixed(2)}</td>
+                <td className="p-3 text-right tabular-nums">{r.activationFee.toFixed(2)}</td>
+                <td className="p-3">
+                  <div className="tabular-nums">{r.saleFrom}</div>
+                  <div className="tabular-nums text-xs text-muted-foreground">{r.saleTo ?? "—"}</div>
+                </td>
                 <td className="p-3">{r.effectiveFrom}</td>
               </tr>
             ))}
             {rows.length === 0 && (
               <tr>
-                <td colSpan={9} className="p-6 text-center text-muted-foreground">
+                <td colSpan={11} className="p-6 text-center text-muted-foreground">
                   Brak wyników
                 </td>
               </tr>

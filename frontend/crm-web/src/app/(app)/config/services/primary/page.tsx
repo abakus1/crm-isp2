@@ -70,7 +70,7 @@ export default function PrimaryPlansPage() {
         <div>
           <div className="text-sm font-semibold">Konfiguracja → Usługi → Usługi główne</div>
           <div className="text-xs text-muted-foreground">
-            Primary plans: dodawanie/edycja/archiwum + harmonogram zmian.
+            Definicja planów primary: ceny miesięczne, opłata aktywacyjna, okno sprzedaży, podwyżki i zależności addonów.
           </div>
         </div>
         <Link className="text-sm underline" href="/config/services">
@@ -115,7 +115,14 @@ export default function PrimaryPlansPage() {
               status: "active",
               subscribersCount: 0,
               effectiveFrom: new Date().toISOString().slice(0, 10),
-              month1Price: 0,
+              monthPrices: Array.from({ length: 24 }, () => 0),
+              activationFee: 0,
+              saleFrom: new Date().toISOString().slice(0, 10),
+              saleTo: null,
+              postTermIncreaseAmount: 0,
+              isCyclic: false,
+              requiredAddonPlanIds: [],
+              optionalAddonPlanIds: [],
             });
             setEditorOpen(true);
           }}
@@ -163,6 +170,8 @@ export default function PrimaryPlansPage() {
               <th className="p-3 text-left">Status</th>
               <th className="p-3 text-right">Subskrybenci</th>
               <th className="p-3 text-right">M1 (zł)</th>
+              <th className="p-3 text-right">Aktywacja (zł)</th>
+              <th className="p-3 text-left">Sprzedaż (od–do)</th>
               <th className="p-3 text-left">Obowiązuje od</th>
               <th className="p-3 text-right">Akcje</th>
             </tr>
@@ -186,7 +195,12 @@ export default function PrimaryPlansPage() {
                 <td className="p-3 font-mono text-xs">{p.billingProductCode}</td>
                 <td className="p-3">{formatStatus(p.status)}</td>
                 <td className="p-3 text-right tabular-nums">{p.subscribersCount}</td>
-                <td className="p-3 text-right tabular-nums">{p.month1Price.toFixed(2)}</td>
+                <td className="p-3 text-right tabular-nums">{(p.monthPrices?.[0] ?? 0).toFixed(2)}</td>
+                <td className="p-3 text-right tabular-nums">{(p.activationFee ?? 0).toFixed(2)}</td>
+                <td className="p-3">
+                  <div className="tabular-nums">{p.saleFrom}</div>
+                  <div className="tabular-nums text-xs text-muted-foreground">{p.saleTo ?? "—"}</div>
+                </td>
                 <td className="p-3">{p.effectiveFrom}</td>
                 <td className="p-3 text-right">
                   <button
@@ -204,7 +218,7 @@ export default function PrimaryPlansPage() {
             ))}
             {view.length === 0 && (
               <tr>
-                <td colSpan={10} className="p-6 text-center text-muted-foreground">
+                <td colSpan={12} className="p-6 text-center text-muted-foreground">
                   Brak wyników
                 </td>
               </tr>
@@ -219,9 +233,11 @@ export default function PrimaryPlansPage() {
         plan={editing}
         families={families.filter((f) => f.status === "active")}
         terms={terms.filter((t) => t.status === "active")}
+        allPlans={plans}
         onClose={() => setEditorOpen(false)}
         onSave={({ planPatch, decision }) => {
-          const effectiveFrom = decision.mode === "now" ? new Date().toISOString().slice(0, 10) : decision.effectiveAtIso;
+          const effectiveFrom =
+            decision.mode === "now" ? new Date().toISOString().slice(0, 10) : decision.effectiveAtIso;
           if (editorMode === "new") {
             setPlans((prev) => [
               ...prev,
@@ -235,7 +251,9 @@ export default function PrimaryPlansPage() {
               } as ServicePlan,
             ]);
           } else if (editing) {
-            setPlans((prev) => prev.map((x) => (x.id === editing.id ? ({ ...x, ...planPatch, effectiveFrom } as ServicePlan) : x)));
+            setPlans((prev) =>
+              prev.map((x) => (x.id === editing.id ? ({ ...x, ...planPatch, effectiveFrom } as ServicePlan) : x))
+            );
           }
           setEditorOpen(false);
         }}
@@ -243,7 +261,11 @@ export default function PrimaryPlansPage() {
 
       <EffectiveAtModal
         open={effectiveOpen}
-        title={bulkAction === "archive" ? "Archiwizacja usług głównych (grupowo)" : "Przywracanie usług głównych (grupowo)"}
+        title={
+          bulkAction === "archive"
+            ? "Archiwizacja usług głównych (grupowo)"
+            : "Przywracanie usług głównych (grupowo)"
+        }
         description="Wybierz kiedy zmiana ma obowiązywać."
         confirmLabel={bulkAction === "archive" ? "Zaplanuj archiwizację" : "Zaplanuj przywrócenie"}
         onClose={() => setEffectiveOpen(false)}

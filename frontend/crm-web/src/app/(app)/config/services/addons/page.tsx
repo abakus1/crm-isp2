@@ -28,6 +28,18 @@ export default function AddonPlansPage() {
   const [q, setQ] = useState<string>("");
 
   const addons = useMemo(() => plans.filter((p) => p.type === "addon"), [plans]);
+  const primary = useMemo(() => plans.filter((p) => p.type === "primary"), [plans]);
+
+  // Addony wymagane przez aktywne primary (z subskrybentami) blokujemy przed archiwizacją.
+  const lockedAddonIds = useMemo(() => {
+    const locked = new Set<string>();
+    for (const p of primary) {
+      if (p.status !== "active") continue;
+      if ((p.subscribersCount ?? 0) <= 0) continue;
+      for (const a of p.requiredAddonPlanIds ?? []) locked.add(a);
+    }
+    return locked;
+  }, [primary]);
 
   const view = useMemo(() => {
     const needle = q.trim().toLowerCase();
@@ -56,6 +68,7 @@ export default function AddonPlansPage() {
       prev.map((p) => {
         if (p.type !== "addon") return p;
         if (!ids.has(p.id)) return p;
+        if (action === "archive" && lockedAddonIds.has(p.id)) return p; // hard guard
         const nextStatus = action === "archive" ? "archived" : "active";
         const effectiveFrom = decision.mode === "now" ? new Date().toISOString().slice(0, 10) : decision.effectiveAtIso;
         return { ...p, status: nextStatus, effectiveFrom };
@@ -70,7 +83,8 @@ export default function AddonPlansPage() {
         <div>
           <div className="text-sm font-semibold">Konfiguracja → Usługi → Usługi dodatkowe</div>
           <div className="text-xs text-muted-foreground">
-            Addons: dodawanie/edycja/archiwum + harmonogram zmian.
+            Addony są zawsze bezterminowe w sprzedaży (operacyjnie). Archiwizacja blokuje sprzedaż nowym, nie usuwa
+            subskrybentów.
           </div>
         </div>
         <Link className="text-sm underline" href="/config/services">
@@ -110,12 +124,21 @@ export default function AddonPlansPage() {
               type: "addon",
               name: "",
               familyId: families[0]?.id ?? "",
-              termId: terms[0]?.id ?? "",
+              termId: terms.find((t) => t.termMonths === null)?.id ?? terms[0]?.id ?? "",
               billingProductCode: "",
               status: "active",
               subscribersCount: 0,
               effectiveFrom: new Date().toISOString().slice(0, 10),
-              month1Price: 0,
+              monthPrices: Array.from({ length: 24 }, () => 0),
+              activationFee: 0,
+              saleFrom: new Date().toISOString().slice(0, 10),
+              saleTo: null,
+              postTermIncreaseAmount: 0,
+              isCyclic: false,
+              requiredAddonPlanIds: [],
+              optionalAddonPlanIds: [],
+              requiresDevice: false,
+              allowedDeviceCategories: [],
             });
             setEditorOpen(true);
           }}
@@ -163,48 +186,63 @@ export default function AddonPlansPage() {
               <th className="p-3 text-left">Status</th>
               <th className="p-3 text-right">Subskrybenci</th>
               <th className="p-3 text-right">M1 (zł)</th>
+              <th className="p-3 text-left">Sprzedaż (od–do)</th>
               <th className="p-3 text-left">Obowiązuje od</th>
               <th className="p-3 text-right">Akcje</th>
             </tr>
           </thead>
           <tbody>
-            {view.map((p) => (
-              <tr key={p.id} className="border-t">
-                <td className="p-3">
-                  <input
-                    type="checkbox"
-                    checked={!!selected[p.id]}
-                    onChange={(e) => setSelected((prev) => ({ ...prev, [p.id]: e.target.checked }))}
-                  />
-                </td>
-                <td className="p-3">
-                  <div className="font-medium">{p.name}</div>
-                  <div className="text-xs text-muted-foreground">{p.id}</div>
-                </td>
-                <td className="p-3">{famById.get(p.familyId) || "—"}</td>
-                <td className="p-3">{termById.get(p.termId) || "—"}</td>
-                <td className="p-3 font-mono text-xs">{p.billingProductCode}</td>
-                <td className="p-3">{formatStatus(p.status)}</td>
-                <td className="p-3 text-right tabular-nums">{p.subscribersCount}</td>
-                <td className="p-3 text-right tabular-nums">{p.month1Price.toFixed(2)}</td>
-                <td className="p-3">{p.effectiveFrom}</td>
-                <td className="p-3 text-right">
-                  <button
-                    className="px-3 py-1.5 rounded-md border"
-                    onClick={() => {
-                      setEditorMode("edit");
-                      setEditing(p);
-                      setEditorOpen(true);
-                    }}
-                  >
-                    Edytuj
-                  </button>
-                </td>
-              </tr>
-            ))}
+            {view.map((p) => {
+              const locked = lockedAddonIds.has(p.id);
+              return (
+                <tr key={p.id} className="border-t">
+                  <td className="p-3">
+                    <input
+                      type="checkbox"
+                      checked={!!selected[p.id]}
+                      disabled={locked && p.status === "active"}
+                      title={locked ? "Addon wymagany przez aktywną usługę główną — nie można archiwizować" : ""}
+                      onChange={(e) => setSelected((prev) => ({ ...prev, [p.id]: e.target.checked }))}
+                    />
+                  </td>
+                  <td className="p-3">
+                    <div className="font-medium flex items-center gap-2">
+                      {p.name}
+                      {locked && p.status === "active" && (
+                        <span className="text-[11px] px-2 py-0.5 rounded-full border bg-muted">Wymagany</span>
+                      )}
+                    </div>
+                    <div className="text-xs text-muted-foreground">{p.id}</div>
+                  </td>
+                  <td className="p-3">{famById.get(p.familyId) || "—"}</td>
+                  <td className="p-3">{termById.get(p.termId) || "—"}</td>
+                  <td className="p-3 font-mono text-xs">{p.billingProductCode}</td>
+                  <td className="p-3">{formatStatus(p.status)}</td>
+                  <td className="p-3 text-right tabular-nums">{p.subscribersCount}</td>
+                  <td className="p-3 text-right tabular-nums">{(p.monthPrices?.[0] ?? 0).toFixed(2)}</td>
+                  <td className="p-3">
+                    <div className="tabular-nums">{p.saleFrom}</div>
+                    <div className="tabular-nums text-xs text-muted-foreground">{p.saleTo ?? "—"}</div>
+                  </td>
+                  <td className="p-3">{p.effectiveFrom}</td>
+                  <td className="p-3 text-right">
+                    <button
+                      className="px-3 py-1.5 rounded-md border"
+                      onClick={() => {
+                        setEditorMode("edit");
+                        setEditing(p);
+                        setEditorOpen(true);
+                      }}
+                    >
+                      Edytuj
+                    </button>
+                  </td>
+                </tr>
+              );
+            })}
             {view.length === 0 && (
               <tr>
-                <td colSpan={10} className="p-6 text-center text-muted-foreground">
+                <td colSpan={11} className="p-6 text-center text-muted-foreground">
                   Brak wyników
                 </td>
               </tr>
@@ -219,9 +257,11 @@ export default function AddonPlansPage() {
         plan={editing}
         families={families.filter((f) => f.status === "active")}
         terms={terms.filter((t) => t.status === "active")}
+        allPlans={plans}
         onClose={() => setEditorOpen(false)}
         onSave={({ planPatch, decision }) => {
-          const effectiveFrom = decision.mode === "now" ? new Date().toISOString().slice(0, 10) : decision.effectiveAtIso;
+          const effectiveFrom =
+            decision.mode === "now" ? new Date().toISOString().slice(0, 10) : decision.effectiveAtIso;
           if (editorMode === "new") {
             setPlans((prev) => [
               ...prev,
@@ -235,7 +275,9 @@ export default function AddonPlansPage() {
               } as ServicePlan,
             ]);
           } else if (editing) {
-            setPlans((prev) => prev.map((x) => (x.id === editing.id ? ({ ...x, ...planPatch, effectiveFrom } as ServicePlan) : x)));
+            setPlans((prev) =>
+              prev.map((x) => (x.id === editing.id ? ({ ...x, ...planPatch, effectiveFrom } as ServicePlan) : x))
+            );
           }
           setEditorOpen(false);
         }}
