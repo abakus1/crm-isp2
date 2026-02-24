@@ -70,6 +70,11 @@ export function Sidebar() {
         key: "config",
         items: [
           {
+            label: "Usługi",
+            href: "/config/services",
+            // permissions dopniemy później (ślepe UI)
+          },
+          {
             label: "Katalog",
             href: "/config/catalog",
             requireAny: ["catalog.products.read", "catalog.requirements.read", "catalog.requirements.write"],

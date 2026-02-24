@@ -9,11 +9,14 @@ import sqlalchemy as sa
 from sqlalchemy.orm import Session
 
 from crm.db.models.contracts import Contract
+from crm.db.models.pricing import CatalogProduct
+from crm.db.models.service_catalog import ServicePlan
 from crm.db.models.subscriptions import Subscription
 from crm.domains.subscriptions.enums import SubscriptionChangeType
 from crm.domains.subscriptions.repositories import SubscriptionRepository
 from crm.services.billing.date_math import effective_first_day_after_full_next_period, first_day_of_month
 from crm.services.billing.payment_plan_service import PaymentPlanService
+from crm.services.subscriptions.subscription_service import SubscriptionService
 
 
 class SubscriptionUseCaseError(RuntimeError):
@@ -41,6 +44,145 @@ def create_subscriptions_from_contract(
     created_by_staff_id: Optional[int] = None,
 ) -> list[Subscription]:
     repo = SubscriptionRepository(db)
+
+    # -----------------------------------------------------
+    # HARD ENFORCEMENT: wymagane addony wg Service Catalog v2
+    #
+    # Cel: jeżeli katalog usług mówi, że primary wymaga addonów (ONT/STB/IP),
+    # to nie wolno nam zapisać primary bez wybranych addonów.
+    #
+    # Uwaga: ten use-case przyjmuje "batch" speców. Żeby enforcement był
+    # jednoznaczny, domyślnie wspieramy:
+    #  - 1 primary w batchu + dowolna liczba addonów (wszystkie liczą się jako wybrane),
+    #  - lub wiele primary TYLKO jeśli addony mają parent_subscription_id wskazujący
+    #    istniejące primary w DB (nie można w tym samym batchu spiąć addonów z nowym primary
+    #    przez parent_subscription_id, bo ID jeszcze nie istnieje).
+    # -----------------------------------------------------
+    specs = list(specs)
+
+    product_codes = sorted({s.product_code for s in specs if s.product_code})
+    if product_codes:
+        # Mapujemy product_code -> catalog_product_id
+        cat_rows = db.execute(
+            sa.select(CatalogProduct.id, CatalogProduct.code).where(CatalogProduct.code.in_(product_codes))
+        ).all()
+        cat_by_code: dict[str, int] = {str(code): int(cid) for (cid, code) in cat_rows}
+
+        missing_codes = sorted(set(product_codes) - set(cat_by_code.keys()))
+        if missing_codes:
+            raise SubscriptionUseCaseError(
+                f"Unknown product_code(s) in specs: {', '.join(missing_codes)}"
+            )
+
+        cat_ids = sorted(set(cat_by_code.values()))
+
+        # Mapujemy catalog_product_id -> ServicePlan (id/is_primary/is_addon)
+        plan_rows = db.execute(
+            sa.select(
+                ServicePlan.id,
+                ServicePlan.billing_catalog_product_id,
+                ServicePlan.is_primary,
+                ServicePlan.is_addon,
+            ).where(ServicePlan.billing_catalog_product_id.in_(cat_ids))
+        ).all()
+
+        plans_by_cat: dict[int, list[tuple[int, bool, bool]]] = {}
+        for pid, cat_id, is_primary, is_addon in plan_rows:
+            plans_by_cat.setdefault(int(cat_id), []).append((int(pid), bool(is_primary), bool(is_addon)))
+
+        # Pilnujemy jednoznaczności: 1 catalog_product_id -> max 1 plan.
+        ambiguous_cat_ids = sorted([cid for cid, rows in plans_by_cat.items() if len(rows) > 1])
+        if ambiguous_cat_ids:
+            raise SubscriptionUseCaseError(
+                "Ambiguous mapping: multiple ServicePlan rows for catalog_product_id(s): "
+                + ", ".join(str(x) for x in ambiguous_cat_ids)
+            )
+
+        plan_by_code: dict[str, tuple[int, bool, bool]] = {}
+        for code, cat_id in cat_by_code.items():
+            rows = plans_by_cat.get(int(cat_id))
+            if not rows:
+                # Jeżeli produkt nie ma ServicePlan w katalogu usług, to nie robimy enforcementu.
+                # (To pozwala działać legacy flow bez blokowania wdrożenia katalogu v2.)
+                continue
+            plan_by_code[str(code)] = rows[0]
+
+        # Wyciągamy primary i addony z batcha.
+        primary_plan_ids: list[int] = []
+        addon_plan_ids: list[int] = []
+        for sp in specs:
+            if not sp.product_code:
+                continue
+            meta = plan_by_code.get(sp.product_code)
+            if not meta:
+                continue
+            plan_id, plan_is_primary, plan_is_addon = meta
+
+            if bool(sp.is_primary) or plan_is_primary:
+                primary_plan_ids.append(int(plan_id))
+            elif plan_is_addon:
+                addon_plan_ids.append(int(plan_id))
+
+        primary_plan_ids = sorted(set(primary_plan_ids))
+        addon_plan_ids = sorted(set(addon_plan_ids))
+
+        if primary_plan_ids:
+            svc = SubscriptionService(db)
+
+            if len(primary_plan_ids) == 1:
+                svc.enforce_plan_requirements(
+                    primary_plan_id=int(primary_plan_ids[0]),
+                    selected_addon_plan_ids=[int(x) for x in addon_plan_ids],
+                )
+            else:
+                # Wiele primary: wymagamy, żeby addony były przypięte do istniejących primary w DB.
+                # W przeciwnym razie enforcement byłby losowy (nie wiemy do którego primary należy addon).
+                ambiguous_addons = [s for s in specs if not bool(s.is_primary) and s.parent_subscription_id is None]
+                if ambiguous_addons and addon_plan_ids:
+                    raise SubscriptionUseCaseError(
+                        "Cannot enforce plan requirements for multiple primary services in a single batch "
+                        "unless addon specs include parent_subscription_id pointing to an existing primary."
+                    )
+
+                # Grupujemy addony po parent_subscription_id -> parent primary plan.
+                by_parent: dict[int, list[int]] = {}
+                for sp in specs:
+                    if sp.parent_subscription_id is None:
+                        continue
+                    if not sp.product_code:
+                        continue
+                    meta = plan_by_code.get(sp.product_code)
+                    if not meta:
+                        continue
+                    plan_id, _p, plan_is_addon = meta
+                    if not plan_is_addon:
+                        continue
+                    by_parent.setdefault(int(sp.parent_subscription_id), []).append(int(plan_id))
+
+                if by_parent:
+                    parent_ids = sorted(by_parent.keys())
+                    parent_rows = db.execute(
+                        sa.select(Subscription.id, Subscription.product_code)
+                        .where(Subscription.id.in_(parent_ids))
+                    ).all()
+                    parent_code_by_id: dict[int, str] = {int(sid): str(pcode) for (sid, pcode) in parent_rows}
+
+                    for parent_sub_id, addon_ids in by_parent.items():
+                        parent_code = parent_code_by_id.get(int(parent_sub_id))
+                        if not parent_code:
+                            raise SubscriptionUseCaseError(
+                                f"parent_subscription_id not found: {parent_sub_id}"
+                            )
+                        parent_meta = plan_by_code.get(parent_code)
+                        if not parent_meta:
+                            # Parent bez ServicePlan w v2 katalogu -> pomijamy enforcement.
+                            continue
+                        parent_plan_id, _pp, _pa = parent_meta
+                        svc.enforce_plan_requirements(
+                            primary_plan_id=int(parent_plan_id),
+                            selected_addon_plan_ids=sorted(set(int(x) for x in addon_ids)),
+                        )
+
     out: list[Subscription] = []
     for spec in specs:
         s = repo.create(
