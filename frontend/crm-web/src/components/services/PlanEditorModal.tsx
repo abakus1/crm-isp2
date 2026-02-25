@@ -3,7 +3,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { SimpleModal } from "@/components/SimpleModal";
 import { EffectiveAtDecision, EffectiveAtModal } from "@/components/services/EffectiveAtModal";
-import { ServiceFamily, ServicePlan, ServiceTerm } from "@/lib/mockServicesConfig";
+import { IpPolicy, ServiceFamily, ServicePlan, ServiceTerm } from "@/lib/mockServicesConfig";
 
 export type PlanEditorResult = {
   planPatch: Partial<ServicePlan>;
@@ -88,6 +88,16 @@ export function PlanEditorModal({
 }) {
   const isPrimary = plan?.type === "primary";
 
+  // IP policy (primary)
+  const [ipPolicy, setIpPolicy] = useState<IpPolicy>((plan?.ipPolicy ?? "NONE") as IpPolicy);
+  const [ipCount, setIpCount] = useState<number>(() => {
+    const p = (plan?.ipPolicy ?? "NONE") as IpPolicy;
+    const raw = plan?.ipCount;
+    if (p === "NONE") return 0;
+    if (raw == null) return 1;
+    return Number.isFinite(raw) ? Math.max(1, Math.floor(raw)) : 1;
+  });
+
   const [name, setName] = useState(plan?.name ?? "");
   const [familyId, setFamilyId] = useState(plan?.familyId ?? (families[0]?.id ?? ""));
   const [termId, setTermId] = useState(plan?.termId ?? (terms[0]?.id ?? ""));
@@ -170,6 +180,13 @@ export function PlanEditorModal({
     setTermId(plan?.termId ?? (terms[0]?.id ?? ""));
     setBillingProductCode(plan?.billingProductCode ?? "");
 
+    // IP policy
+    const p = (plan?.ipPolicy ?? "NONE") as IpPolicy;
+    setIpPolicy(p);
+    const c = plan?.ipCount;
+    if (p === "NONE") setIpCount(0);
+    else setIpCount(c != null && Number.isFinite(c) ? Math.max(1, Math.floor(c)) : 1);
+
     originalActivationFeeRef.current = plan?.activationFee ?? 0;
     setActivationFee(plan ? String(plan.activationFee ?? 0) : "0");
 
@@ -236,6 +253,12 @@ export function PlanEditorModal({
 
     // QoS (jeśli włączone, musi być liczbą >=0)
     if (isPrimary) {
+      // IP policy
+      if (ipPolicy !== "NONE") {
+        if (!Number.isFinite(ipCount) || ipCount < 1) return false;
+        if (ipCount > 16) return false;
+      }
+
       if (downloadLimitEnabled) {
         const n = toNumberOrNaN(downloadBps);
         if (Number.isNaN(n) || n < 0) return false;
@@ -258,6 +281,8 @@ export function PlanEditorModal({
     monthPrices,
     saleFrom,
     isPrimary,
+    ipPolicy,
+    ipCount,
     downloadLimitEnabled,
     uploadLimitEnabled,
     downloadBps,
@@ -386,6 +411,104 @@ export function PlanEditorModal({
             </div>
 
             <MonthPriceGrid monthPrices={monthPrices} setMonthPrices={setMonthPrices} />
+
+            {isPrimary && (
+              <div className="rounded-xl border p-3 bg-muted/10 space-y-3">
+                <div className="text-sm font-medium">Wymagania IP (UI-only)</div>
+                <div className="text-xs text-muted-foreground">
+                  To jest tylko oznaczenie dla przyszłego provisioning’u i magazynu IP. Na razie nic się nie dzieje
+                  automatycznie.
+                </div>
+
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+                  <div className="md:col-span-2">
+                    <div className="text-xs text-muted-foreground">Polityka IP</div>
+                    <div className="mt-1 inline-flex rounded-lg border overflow-hidden">
+                      <button
+                        type="button"
+                        className={[
+                          "px-3 py-2 text-sm",
+                          ipPolicy === "NONE" ? "bg-primary text-primary-foreground" : "bg-background",
+                        ].join(" ")}
+                        onClick={() => {
+                          setIpPolicy("NONE");
+                          setIpCount(0);
+                        }}
+                      >
+                        No IP
+                      </button>
+                      <button
+                        type="button"
+                        className={[
+                          "px-3 py-2 text-sm border-l",
+                          ipPolicy === "NAT_PRIVATE" ? "bg-primary text-primary-foreground" : "bg-background",
+                        ].join(" ")}
+                        onClick={() => {
+                          setIpPolicy("NAT_PRIVATE");
+                          setIpCount((c) => (c >= 1 ? c : 1));
+                        }}
+                      >
+                        IP NAT
+                      </button>
+                      <button
+                        type="button"
+                        className={[
+                          "px-3 py-2 text-sm border-l",
+                          ipPolicy === "PUBLIC" ? "bg-primary text-primary-foreground" : "bg-background",
+                        ].join(" ")}
+                        onClick={() => {
+                          setIpPolicy("PUBLIC");
+                          setIpCount((c) => (c >= 1 ? c : 1));
+                        }}
+                      >
+                        IP Public
+                      </button>
+                    </div>
+                  </div>
+
+                  <div>
+                    <div className="text-xs text-muted-foreground">Ilość IPv4</div>
+                    <div className="mt-1 flex items-center gap-2">
+                      <button
+                        type="button"
+                        className="px-2 py-2 rounded-md border disabled:opacity-60"
+                        disabled={ipPolicy === "NONE" || ipCount <= 1}
+                        onClick={() => setIpCount((c) => Math.max(1, c - 1))}
+                      >
+                        −
+                      </button>
+                      <input
+                        type="number"
+                        min={1}
+                        max={16}
+                        step={1}
+                        value={ipPolicy === "NONE" ? 0 : ipCount}
+                        disabled={ipPolicy === "NONE"}
+                        onChange={(e) => {
+                          const v = Math.floor(Number(e.target.value));
+                          if (!Number.isFinite(v)) return;
+                          setIpCount(Math.max(1, Math.min(16, v)));
+                        }}
+                        className="w-24 rounded-md border px-3 py-2 text-sm tabular-nums disabled:opacity-60"
+                      />
+                      <button
+                        type="button"
+                        className="px-2 py-2 rounded-md border disabled:opacity-60"
+                        disabled={ipPolicy === "NONE" || ipCount >= 16}
+                        onClick={() => setIpCount((c) => Math.min(16, (c >= 1 ? c : 1) + 1))}
+                      >
+                        +
+                      </button>
+                    </div>
+                    {ipPolicy === "NONE" ? (
+                      <div className="mt-1 text-[11px] text-muted-foreground">Brak wymagań IP.</div>
+                    ) : (
+                      <div className="mt-1 text-[11px] text-muted-foreground">Zakres: 1–16 (na start).</div>
+                    )}
+                  </div>
+                </div>
+              </div>
+            )}
 
             {isPrimary && (
               <div className="rounded-xl border p-3 bg-muted/10 space-y-3">
@@ -624,6 +747,8 @@ export function PlanEditorModal({
           };
 
           if (isPrimary) {
+            patch.ipPolicy = ipPolicy;
+            patch.ipCount = ipPolicy === "NONE" ? 0 : Math.max(1, Math.min(16, Math.floor(ipCount || 1)));
             patch.downloadBps = downloadLimitEnabled ? toNumberOrNaN(downloadBps) : undefined;
             patch.uploadBps = uploadLimitEnabled ? toNumberOrNaN(uploadBps) : undefined;
           }

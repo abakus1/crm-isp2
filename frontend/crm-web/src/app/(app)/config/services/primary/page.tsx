@@ -12,6 +12,29 @@ function uid(prefix: string) {
   return `${prefix}-${Math.random().toString(16).slice(2, 10)}`;
 }
 
+function formatIp(p: ServicePlan): string {
+  const pol = p.ipPolicy ?? "NONE";
+  if (pol === "NONE") return "—";
+  const qty = Math.max(1, Math.floor(p.ipCount ?? 1));
+  if (pol === "NAT_PRIVATE") return `NAT ×${qty}`;
+  return `PUBLIC ×${qty}`;
+}
+
+function formatBps(bps?: number): string {
+  if (bps == null || !Number.isFinite(bps) || bps <= 0) return "—";
+  const gbps = bps / 1_000_000_000;
+  if (gbps >= 1) return `${gbps.toFixed(gbps % 1 === 0 ? 0 : 2)} Gbps`;
+  const mbps = bps / 1_000_000;
+  return `${mbps.toFixed(mbps % 1 === 0 ? 0 : 1)} Mbps`;
+}
+
+function formatSpeed(p: ServicePlan): string {
+  const dl = formatBps(p.downloadBps);
+  const ul = formatBps(p.uploadBps);
+  if (dl === "—" && ul === "—") return "—";
+  return `${dl} / ${ul}`;
+}
+
 export default function PrimaryPlansPage() {
   const [families] = useState<ServiceFamily[]>(seedFamilies());
   const [terms] = useState<ServiceTerm[]>(seedTerms());
@@ -119,6 +142,11 @@ export default function PrimaryPlansPage() {
               isCyclic: false,
               requiredAddonPlanIds: [],
               optionalAddonPlanIds: [],
+
+              ipPolicy: "NONE",
+              ipCount: 0,
+              downloadBps: undefined,
+              uploadBps: undefined,
             });
             setEditorOpen(true);
           }}
@@ -165,6 +193,8 @@ export default function PrimaryPlansPage() {
               <th className="p-3 text-left">Billing code</th>
               <th className="p-3 text-left">Status</th>
               <th className="p-3 text-right">Subskrybenci</th>
+              <th className="p-3 text-left">IP</th>
+              <th className="p-3 text-left">Prędkość (DL/UL)</th>
               <th className="p-3 text-right">M1 (zł)</th>
               <th className="p-3 text-right">Aktywacja (zł)</th>
               <th className="p-3 text-left">Sprzedaż (od–do)</th>
@@ -191,6 +221,12 @@ export default function PrimaryPlansPage() {
                 <td className="p-3 font-mono text-xs">{p.billingProductCode}</td>
                 <td className="p-3">{formatStatus(p.status)}</td>
                 <td className="p-3 text-right tabular-nums">{p.subscribersCount}</td>
+                <td className="p-3">
+                  <div className="text-xs font-medium">{formatIp(p)}</div>
+                </td>
+                <td className="p-3">
+                  <div className="text-xs font-medium tabular-nums">{formatSpeed(p)}</div>
+                </td>
                 <td className="p-3 text-right tabular-nums">{(p.monthPrices?.[0] ?? 0).toFixed(2)}</td>
                 <td className="p-3 text-right tabular-nums">{(p.activationFee ?? 0).toFixed(2)}</td>
                 <td className="p-3">
@@ -214,7 +250,7 @@ export default function PrimaryPlansPage() {
             ))}
             {view.length === 0 && (
               <tr>
-                <td colSpan={12} className="p-6 text-center text-muted-foreground">
+                <td colSpan={14} className="p-6 text-center text-muted-foreground">
                   Brak wyników
                 </td>
               </tr>
