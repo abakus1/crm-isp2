@@ -1,109 +1,166 @@
 "use client";
 
-// Runtime-only seeds (bez TS syntax). Typy są w mockServicesConfig.types.ts.
+import type {
+  ServiceFamily,
+  ServicePlan,
+  ServiceTerm,
+  ServiceStatus,
+  ServicePlanType,
+  IpPolicy,
+} from "./mockServicesConfig.types";
 
-function uid(prefix) {
-  return `${prefix}-${Math.random().toString(16).slice(2, 10)}`;
+export type { ServiceFamily, ServicePlan, ServiceTerm, ServiceStatus, ServicePlanType, IpPolicy };
+
+function fillMonthPrices(price: number, months: number): number[] {
+  return Array.from({ length: months }, () => price);
 }
 
-function todayIso() {
-  return new Date().toISOString().slice(0, 10);
-}
+const STATUS_ACTIVE = "active" as const;
+const STATUS_ARCHIVED = "archived" as const;
 
-// Używamy const-literalów, żeby TS nie degradował "active" -> string
-/** @type {const} */
-const STATUS_ACTIVE = "active";
-/** @type {const} */
-const STATUS_ARCHIVED = "archived";
+const IP_NONE = "NONE" as const;
+const IP_NAT = "NAT_PRIVATE" as const;
+const IP_PUBLIC = "PUBLIC" as const;
 
-/** @type {const} */
-const IP_NONE = "NONE";
-/** @type {const} */
-const IP_NAT = "NAT_PRIVATE";
-/** @type {const} */
-const IP_PUBLIC = "PUBLIC";
-
-export function seedFamilies() {
-  const d = todayIso();
+// Deterministyczne seed'y (stałe ID) – UI wywołuje seedFamilies/seedTerms/seedPlans osobno,
+// więc nie możemy generować losowych ID, bo relacje familyId/termId by się rozjechały.
+export function seedFamilies(): ServiceFamily[] {
   return [
-    { id: uid("fam"), code: "internet", name: "Internet", status: STATUS_ACTIVE, effectiveFrom: d },
-    { id: uid("fam"), code: "tv", name: "Telewizja", status: STATUS_ACTIVE, effectiveFrom: d },
-    { id: uid("fam"), code: "infra", name: "Infrastruktura", status: STATUS_ARCHIVED, effectiveFrom: d },
+    { id: "fam-inet", code: "internet", name: "Internet", status: STATUS_ACTIVE, effectiveFrom: "2026-01-01" },
+    { id: "fam-tv", code: "tv", name: "Telewizja", status: STATUS_ACTIVE, effectiveFrom: "2026-01-01" },
+    { id: "fam-infra", code: "infra", name: "Infrastruktura", status: STATUS_ARCHIVED, effectiveFrom: "2026-01-01" },
   ];
 }
 
-export function seedTerms() {
-  const d = todayIso();
+export function seedTerms(): ServiceTerm[] {
   return [
-    { id: uid("term"), months: null, name: "Na czas nieokreślony", status: STATUS_ACTIVE, effectiveFrom: d },
-    { id: uid("term"), months: 12, name: "12 miesięcy", status: STATUS_ACTIVE, effectiveFrom: d },
-    { id: uid("term"), months: 24, name: "24 miesiące", status: STATUS_ACTIVE, effectiveFrom: d },
-  ];
-}
-
-export function seedPlans() {
-  const d = todayIso();
-  const families = seedFamilies();
-  const terms = seedTerms();
-
-  const famInternet = families.find((f) => f.code === "internet")?.id || families[0].id;
-  const famTv = families.find((f) => f.code === "tv")?.id || families[0].id;
-
-  const termIndef = terms.find((t) => t.months === null)?.id || terms[0].id;
-  const term12 = terms.find((t) => t.months === 12)?.id || terms[0].id;
-
-  return [
-    // Primary
     {
-      id: uid("plan"),
-      type: "primary",
-      familyId: famInternet,
-      termId: termIndef,
-      name: "Internet 1G",
+      id: "term-undef",
+      name: "Na czas nieokreślony",
+      termMonths: null,
       status: STATUS_ACTIVE,
-      effectiveFrom: d,
+      effectiveFrom: "2026-01-01",
+      saleFrom: "2026-01-01",
+      saleTo: null,
+    },
+    {
+      id: "term-12",
+      name: "12 miesięcy",
+      termMonths: 12,
+      status: STATUS_ACTIVE,
+      effectiveFrom: "2026-01-01",
+      saleFrom: "2026-01-01",
+      saleTo: null,
+    },
+    {
+      id: "term-24",
+      name: "24 miesiące",
+      termMonths: 24,
+      status: STATUS_ACTIVE,
+      effectiveFrom: "2026-01-01",
+      saleFrom: "2026-01-01",
+      saleTo: null,
+    },
+  ];
+}
+
+export function seedPlans(): ServicePlan[] {
+  // UI pokazuje np. 24 pola, jeśli termMonths = null (bezterminowa)
+  const uiDefaultMonths = 24;
+
+  return [
+    // PRIMARY
+    {
+      id: "plan-inet-1g-undef",
+      type: "primary",
+      familyId: "fam-inet",
+      termId: "term-undef",
+      name: "Internet 1G",
+      billingProductCode: "INTERNET_1G",
+      status: STATUS_ACTIVE,
+      subscribersCount: 120,
+      effectiveFrom: "2026-01-01",
+      monthPrices: fillMonthPrices(99, uiDefaultMonths),
+      activationFee: 1,
       ipPolicy: IP_NAT,
       ipCount: 1,
+      saleFrom: "2026-01-01",
+      saleTo: null,
+      requiredAddonPlanIds: ["plan-addon-ont"],
+      optionalAddonPlanIds: ["plan-addon-ip-public"],
     },
     {
-      id: uid("plan"),
+      id: "plan-tv-max-12",
       type: "primary",
-      familyId: famTv,
-      termId: term12,
-      name: "TV Pakiet Start",
+      familyId: "fam-tv",
+      termId: "term-12",
+      name: "TV Max",
+      billingProductCode: "TV_MAX",
       status: STATUS_ACTIVE,
-      effectiveFrom: d,
+      subscribersCount: 45,
+      effectiveFrom: "2026-01-01",
+      monthPrices: fillMonthPrices(59, 12),
+      activationFee: 0,
       ipPolicy: IP_NONE,
-      ipCount: 1,
+      saleFrom: "2026-01-01",
+      saleTo: null,
+      requiredAddonPlanIds: ["plan-addon-stb"],
+      optionalAddonPlanIds: [],
     },
 
-    // Addons
+    // ADDONS
     {
-      id: uid("plan"),
+      id: "plan-addon-ont",
       type: "addon",
-      familyId: famInternet,
-      termId: termIndef,
-      name: "Publiczny adres IPv4",
+      familyId: "fam-inet",
+      termId: "term-undef",
+      name: "ONT dzierżawa",
+      billingProductCode: "ONT_RENT",
       status: STATUS_ACTIVE,
-      effectiveFrom: d,
-      ipPolicy: IP_PUBLIC,
-      ipCount: 1,
+      subscribersCount: 500,
+      effectiveFrom: "2026-01-01",
+      monthPrices: fillMonthPrices(10, uiDefaultMonths),
+      activationFee: 0,
+      ipPolicy: IP_NONE,
+      saleFrom: "2026-01-01",
+      saleTo: null,
     },
     {
-      id: uid("plan"),
+      id: "plan-addon-ip-public",
       type: "addon",
-      familyId: famTv,
-      termId: term12,
-      name: "Dekoder STB (dzierżawa)",
+      familyId: "fam-inet",
+      termId: "term-undef",
+      name: "Publiczne IPv4",
+      billingProductCode: "IPV4_PUBLIC",
       status: STATUS_ACTIVE,
-      effectiveFrom: d,
-      ipPolicy: IP_NONE,
+      subscribersCount: 80,
+      effectiveFrom: "2026-01-01",
+      monthPrices: fillMonthPrices(20, uiDefaultMonths),
+      activationFee: 0,
+      ipPolicy: IP_PUBLIC,
       ipCount: 1,
+      saleFrom: "2026-01-01",
+      saleTo: null,
+    },
+    {
+      id: "plan-addon-stb",
+      type: "addon",
+      familyId: "fam-tv",
+      termId: "term-undef",
+      name: "STB dzierżawa",
+      billingProductCode: "STB_RENT",
+      status: STATUS_ACTIVE,
+      subscribersCount: 260,
+      effectiveFrom: "2026-01-01",
+      monthPrices: fillMonthPrices(8, uiDefaultMonths),
+      activationFee: 0,
+      ipPolicy: IP_NONE,
+      saleFrom: "2026-01-01",
+      saleTo: null,
     },
   ];
 }
 
-// UI helpers
-export function formatStatus(s) {
-  return s === "active" ? "Aktywna" : "Archiwalna";
+export function formatStatus(status: ServiceStatus): string {
+  return status === "active" ? "Aktywny" : "Archiwalny";
 }
