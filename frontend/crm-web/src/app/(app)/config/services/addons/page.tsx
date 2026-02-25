@@ -131,6 +131,9 @@ export default function AddonPlansPage() {
               effectiveFrom: new Date().toISOString().slice(0, 10),
               monthPrices: Array.from({ length: 24 }, () => 0),
               activationFee: 0,
+              // UI model: ceny po zakończeniu okresu umowy (umowa bezterminowa) – wymagane przez ServicePlan
+              indefiniteMonthlyPrice: 0,
+              indefiniteActivationFee: 0,
               saleFrom: new Date().toISOString().slice(0, 10),
               saleTo: null,
               postTermIncreaseAmount: 0,

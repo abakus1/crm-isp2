@@ -99,11 +99,13 @@ export function PlanEditorModal({
   const [activationFee, setActivationFee] = useState<string>(plan ? String(plan.activationFee ?? 0) : "0");
 
   // QoS toggles + wartości
+  // ServicePlan nie ma flag downloadLimitEnabled/uploadLimitEnabled.
+  // UI trzyma je lokalnie i wylicza z obecności wartości downloadBps/uploadBps.
   const [downloadLimitEnabled, setDownloadLimitEnabled] = useState<boolean>(
-    plan?.downloadLimitEnabled ?? (plan?.downloadBps != null && String(plan?.downloadBps).trim() !== "")
+    plan?.downloadBps != null && String(plan?.downloadBps).trim() !== ""
   );
   const [uploadLimitEnabled, setUploadLimitEnabled] = useState<boolean>(
-    plan?.uploadLimitEnabled ?? (plan?.uploadBps != null && String(plan?.uploadBps).trim() !== "")
+    plan?.uploadBps != null && String(plan?.uploadBps).trim() !== ""
   );
   const [downloadBps, setDownloadBps] = useState<string>(plan?.downloadBps != null ? String(plan.downloadBps) : "");
   const [uploadBps, setUploadBps] = useState<string>(plan?.uploadBps != null ? String(plan.uploadBps) : "");
@@ -172,10 +174,8 @@ export function PlanEditorModal({
     setActivationFee(plan ? String(plan.activationFee ?? 0) : "0");
 
     // QoS
-    const dlEnabled =
-      plan?.downloadLimitEnabled ?? (plan?.downloadBps != null && String(plan?.downloadBps).trim() !== "");
-    const ulEnabled =
-      plan?.uploadLimitEnabled ?? (plan?.uploadBps != null && String(plan?.uploadBps).trim() !== "");
+    const dlEnabled = plan?.downloadBps != null && String(plan?.downloadBps).trim() !== "";
+    const ulEnabled = plan?.uploadBps != null && String(plan?.uploadBps).trim() !== "";
     setDownloadLimitEnabled(!!dlEnabled);
     setUploadLimitEnabled(!!ulEnabled);
     setDownloadBps(plan?.downloadBps != null ? String(plan.downloadBps) : "");
@@ -624,11 +624,8 @@ export function PlanEditorModal({
           };
 
           if (isPrimary) {
-            patch.downloadLimitEnabled = downloadLimitEnabled;
-            patch.uploadLimitEnabled = uploadLimitEnabled;
-
-            patch.downloadBps = downloadLimitEnabled ? toNumberOrNaN(downloadBps) : null;
-            patch.uploadBps = uploadLimitEnabled ? toNumberOrNaN(uploadBps) : null;
+            patch.downloadBps = downloadLimitEnabled ? toNumberOrNaN(downloadBps) : undefined;
+            patch.uploadBps = uploadLimitEnabled ? toNumberOrNaN(uploadBps) : undefined;
           }
 
           if (plan?.type === "addon") {

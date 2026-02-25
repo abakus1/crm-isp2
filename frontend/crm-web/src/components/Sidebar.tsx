@@ -75,6 +75,11 @@ export function Sidebar() {
             // permissions dopniemy później (ślepe UI)
           },
           {
+            label: "Magazyn IP",
+            href: "/config/ip",
+            // UI-only: backend podepniemy później
+          },
+          {
             label: "Katalog",
             href: "/config/catalog",
             requireAny: ["catalog.products.read", "catalog.requirements.read", "catalog.requirements.write"],

@@ -56,41 +56,54 @@ export default function ServiceTermsPage() {
     setName(r.name);
     setIsIndef(r.termMonths === null);
     setMonths(r.termMonths === null ? "" : String(r.termMonths));
-    setSaleFrom(r.saleFrom);
+    // FIX: saleFrom bywa undefined, a state oczekuje string
+    setSaleFrom(r.saleFrom ?? "");
     setSaleTo(r.saleTo ?? "");
     setEditOpen(true);
   }
 
   function save() {
-    const now = new Date().toISOString().slice(0, 10);
-    const termMonths = isIndef ? null : Number(months);
-    if (!isIndef && (!months.trim() || Number.isNaN(termMonths) || termMonths <= 0)) return;
+  const now = new Date().toISOString().slice(0, 10);
 
-    if (editMode === "new") {
-      setRows((prev) => [
-        ...prev,
-        {
-          id: uid("term"),
-          name: name.trim(),
-          termMonths,
-          status: "active",
-          effectiveFrom: now,
-          saleFrom: saleFrom.trim(),
-          saleTo: saleTo.trim() ? saleTo.trim() : null,
-        },
-      ]);
-    } else if (editId) {
-      setRows((prev) =>
-        prev.map((r) =>
-          r.id === editId
-            ? { ...r, name: name.trim(), termMonths, saleFrom: saleFrom.trim(), saleTo: saleTo.trim() ? saleTo.trim() : null }
-            : r
-        )
-      );
-    }
+  let termMonths: number | null = null;
 
-    setEditOpen(false);
+  if (!isIndef) {
+    const m = Number(months);
+    if (!months.trim() || Number.isNaN(m) || m <= 0) return;
+    termMonths = m;
   }
+
+  if (editMode === "new") {
+    setRows((prev) => [
+      ...prev,
+      {
+        id: uid("term"),
+        name: name.trim(),
+        termMonths,
+        status: "active",
+        effectiveFrom: now,
+        saleFrom: saleFrom.trim(),
+        saleTo: saleTo.trim() ? saleTo.trim() : null,
+      },
+    ]);
+  } else if (editId) {
+    setRows((prev) =>
+      prev.map((r) =>
+        r.id === editId
+          ? {
+              ...r,
+              name: name.trim(),
+              termMonths,
+              saleFrom: saleFrom.trim(),
+              saleTo: saleTo.trim() ? saleTo.trim() : null,
+            }
+          : r
+      )
+    );
+  }
+
+  setEditOpen(false);
+}
 
   function applyBulk(action: "archive" | "restore", decision: EffectiveAtDecision) {
     const ids = new Set(selectedIds);
