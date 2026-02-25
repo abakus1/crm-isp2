@@ -136,9 +136,10 @@ export default function IpNetworksPage() {
         // broadcast liczy się automatycznie, ale info zostawiamy w labelce
         void info;
         setIpamState((prev) => ({
-          networks: [...prev.networks, network],
-          addresses: [...prev.addresses, ...addresses],
-        }));
+        ...prev,
+        networks: [...prev.networks, network],
+        addresses: [...prev.addresses, ...addresses],
+      }));
       } else if (editId) {
         updateNetwork(editId, {
           type,

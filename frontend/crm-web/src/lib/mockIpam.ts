@@ -48,9 +48,30 @@ export type IpAddress = {
   mac?: string;
 };
 
+export type IpAddressHistoryAction =
+  | "ASSIGN"
+  | "UNASSIGN"
+  | "BLOCK"
+  | "UNBLOCK"
+  | "RESERVE"
+  | "UNRESERVE"
+  | "EDIT";
+
+export type IpAddressHistoryEvent = {
+  id: string;
+  addrId: string;
+  atIso: string;
+  action: IpAddressHistoryAction;
+  actor: string; // UI-only (docelowo staff_user)
+  note?: string;
+  before?: Partial<IpAddress>;
+  after?: Partial<IpAddress>;
+};
+
 export type IpamState = {
   networks: IpNetwork[];
   addresses: IpAddress[];
+  addressHistory: Record<string, IpAddressHistoryEvent[]>;
 };
 
 function uid(prefix: string) {
@@ -59,6 +80,28 @@ function uid(prefix: string) {
 
 function todayIso() {
   return new Date().toISOString().slice(0, 10);
+}
+
+const DEFAULT_ACTOR = "staff:demo";
+
+function nowIso() {
+  return new Date().toISOString();
+}
+
+function pushHistory(prev: IpamState, addrId: string, ev: Omit<IpAddressHistoryEvent, "id" | "addrId" | "atIso" | "actor"> & { actor?: string; atIso?: string }) {
+  const list = prev.addressHistory[addrId] ? [...prev.addressHistory[addrId]] : [];
+  const full: IpAddressHistoryEvent = {
+    id: uid("iphe"),
+    addrId,
+    atIso: ev.atIso ?? nowIso(),
+    action: ev.action,
+    actor: ev.actor ?? DEFAULT_ACTOR,
+    note: ev.note,
+    before: ev.before,
+    after: ev.after,
+  };
+  list.unshift(full);
+  return { ...prev.addressHistory, [addrId]: list };
 }
 
 // ---------- IP math (IPv4) ----------
@@ -212,7 +255,11 @@ function seedState(): IpamState {
     };
   }
 
-  return { networks: [n1, n2], addresses: [...a1, ...a2] };
+  return {
+    networks: [n1, n2],
+    addresses: [...a1, ...a2],
+    addressHistory: {},
+  };
 }
 
 function getGlobal(): any {
@@ -303,8 +350,10 @@ export function updateNetwork(
 
 export function deleteNetwork(networkId: string) {
   setIpamState((prev) => ({
+    ...prev,
     networks: prev.networks.filter((n) => n.id !== networkId),
     addresses: prev.addresses.filter((a) => a.networkId !== networkId),
+    // addressHistory zostaje; ewentualnie później możemy czyścić eventy adresów tej sieci
   }));
 }
 
@@ -312,13 +361,19 @@ export function splitNetwork(networkId: string, childPrefix: number) {
   setIpamState((prev) => {
     const parent = prev.networks.find((n) => n.id === networkId);
     if (!parent) return prev;
+
     const inParent = prev.addresses.filter((a) => a.networkId === networkId);
     const hasUsed = inParent.some((a) => a.status !== "FREE");
-    if (hasUsed) throw new Error("Nie można dzielić sieci z wykorzystanymi adresami (tylko FREE).");
+    if (hasUsed) {
+      throw new Error("Nie można dzielić sieci z wykorzystanymi adresami (tylko FREE).");
+    }
 
     const childCidrs = splitCidr(parent.cidr, childPrefix);
-    const created = childCidrs.map((cidr) =>
-      createNetwork({
+    const createdAtIso = todayIso();
+
+    const created = childCidrs.map((cidr) => {
+      const network: IpNetwork = {
+        id: uid("net"),
         cidr,
         type: parent.type,
         usage: parent.usage,
@@ -326,12 +381,34 @@ export function splitNetwork(networkId: string, childPrefix: number) {
         gateway: parent.gateway,
         dns1: parent.dns1,
         dns2: parent.dns2,
-      })
-    );
+        broadcast: networkInfo(cidr).broadcast,
+        createdAtIso,
+      };
+
+      const addresses = generateUsableIps(network.cidr).map<IpAddress>((ip) => ({
+        id: uid("ip"),
+        ip,
+        networkId: network.id,
+        description: "",
+        status: "FREE",
+        gateway: network.gateway,
+        dns1: network.dns1,
+        dns2: network.dns2,
+      }));
+
+      return { network, addresses };
+    });
 
     return {
-      networks: [...prev.networks.filter((n) => n.id !== networkId), ...created.map((c) => c.network)],
-      addresses: [...prev.addresses.filter((a) => a.networkId !== networkId), ...created.flatMap((c) => c.addresses)],
+      ...prev,
+      networks: [
+        ...prev.networks.filter((n) => n.id !== networkId),
+        ...created.map((c) => c.network),
+      ],
+      addresses: [
+        ...prev.addresses.filter((a) => a.networkId !== networkId),
+        ...created.flatMap((c) => c.addresses),
+      ],
     };
   });
 }
@@ -351,7 +428,7 @@ export function assignAddress(
 ) {
   const now = todayIso();
   setIpamState((prev) => {
-    const addresses = prev.addresses.map((a) => {
+    const addresses: IpAddress[] = prev.addresses.map((a): IpAddress => {
       if (a.id !== addrId) return a;
 
       const customer = input.customerName.trim();
@@ -394,27 +471,86 @@ export function assignAddress(
       return base; // STATIC
     });
 
-    return { ...prev, addresses };
+    const before = prev.addresses.find((x) => x.id === addrId);
+    const after = addresses.find((x) => x.id === addrId);
+    const addressHistory = pushHistory(prev, addrId, {
+      action: "ASSIGN",
+      note: `mode=${after?.mode ?? ""}`,
+      before: before ? {
+        status: before.status,
+        mode: before.mode,
+        customerName: before.customerName,
+        description: before.description,
+        mac: before.mac,
+        pppoeLogin: before.pppoeLogin,
+        expiresAtIso: before.expiresAtIso,
+      } : undefined,
+      after: after ? {
+        status: after.status,
+        mode: after.mode,
+        customerName: after.customerName,
+        description: after.description,
+        mac: after.mac,
+        pppoeLogin: after.pppoeLogin,
+        expiresAtIso: after.expiresAtIso,
+      } : undefined,
+    });
+    return { ...prev, addresses, addressHistory };
   });
 }
 
 export function unassignAddress(addrId: string) {
-  setIpamState((prev) => ({
-    ...prev,
-    addresses: prev.addresses.map((a) =>
+  setIpamState((prev) => {
+    const before = prev.addresses.find((x) => x.id === addrId);
+    const addresses: IpAddress[] = prev.addresses.map((a): IpAddress =>
       a.id === addrId
         ? {
             ...a,
             status: "FREE",
-            customerName: "",
-            assignedAtIso: "",
-            expiresAtIso: "",
+            // UI-only: po zwolnieniu czyścimy dane przypisania (włącznie z opisem adresu),
+            // bo opis jest częścią "przydziału", a nie stałą cechą puli.
+            description: "",
+            customerName: undefined,
+            assignedAtIso: undefined,
+            expiresAtIso: undefined,
             mode: undefined,
             mac: undefined,
             pppoeLogin: undefined,
             pppoePassword: undefined,
           }
         : a
-    ),
-  }));
+    );
+
+    const after = addresses.find((x) => x.id === addrId);
+
+    const addressHistory = pushHistory(prev, addrId, {
+      action: "UNASSIGN",
+      before: before
+        ? {
+            status: before.status,
+            mode: before.mode,
+            customerName: before.customerName,
+            description: before.description,
+            mac: before.mac,
+            pppoeLogin: before.pppoeLogin,
+            expiresAtIso: before.expiresAtIso,
+          }
+        : undefined,
+      after: after
+        ? {
+            status: after.status,
+            mode: after.mode,
+            customerName: after.customerName,
+            description: after.description,
+          }
+        : undefined,
+    });
+
+    return { ...prev, addresses, addressHistory };
+  });
+}
+
+export function getAddressHistory(addrId: string): IpAddressHistoryEvent[] {
+  const s = getIpamState();
+  return s.addressHistory[addrId] ?? [];
 }
