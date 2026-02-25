@@ -3,6 +3,7 @@
 import { useMemo, useState } from "react";
 import Link from "next/link";
 
+import { SimpleModal } from "@/components/SimpleModal";
 import { EffectiveAtModal, EffectiveAtDecision } from "@/components/services/EffectiveAtModal";
 import { formatStatus, seedFamilies, seedPlans, seedTerms } from "@/lib/mockServicesConfig";
 import type { ServiceFamily, ServicePlan, ServiceTerm } from "@/lib/mockServicesConfig.types";
@@ -61,6 +62,21 @@ export default function ServicesListPage() {
         return hay.includes(needle);
       });
   }, [plans, familyById, termById, filterStatus, q]);
+
+  const [deleteOpen, setDeleteOpen] = useState(false);
+  const [deleteId, setDeleteId] = useState<string | null>(null);
+
+  function requestDelete(planId: string) {
+    setDeleteId(planId);
+    setDeleteOpen(true);
+  }
+
+  function doDelete() {
+    if (!deleteId) return;
+    setPlans((prev) => prev.filter((p) => p.id !== deleteId));
+    setDeleteOpen(false);
+    setDeleteId(null);
+  }
 
   const [decisionOpen, setDecisionOpen] = useState(false);
   const [decisionCtx, setDecisionCtx] = useState<{
@@ -215,21 +231,44 @@ export default function ServicesListPage() {
             </div>
 
             <div className="col-span-1 text-right">
-              {r.status === "active" ? (
-                <button
+              <div className="inline-flex items-center justify-end gap-2">
+                <Link
+                  href={
+                    r.type === "primary"
+                      ? `/config/services/primary?edit=${encodeURIComponent(r.id)}`
+                      : `/config/services/addons?edit=${encodeURIComponent(r.id)}`
+                  }
                   className="px-3 py-2 rounded-md border bg-background hover:bg-muted text-sm"
-                  onClick={() => askArchive(r.id)}
                 >
-                  Archiwizuj
-                </button>
-              ) : (
-                <button
-                  className="px-3 py-2 rounded-md border bg-background hover:bg-muted text-sm"
-                  onClick={() => askRestore(r.id)}
-                >
-                  Przywróć
-                </button>
-              )}
+                  Edytuj
+                </Link>
+
+                {r.status === "active" ? (
+                  <button
+                    className="px-3 py-2 rounded-md border bg-background hover:bg-muted text-sm"
+                    onClick={() => askArchive(r.id)}
+                  >
+                    Archiwizuj
+                  </button>
+                ) : (
+                  <button
+                    className="px-3 py-2 rounded-md border bg-background hover:bg-muted text-sm"
+                    onClick={() => askRestore(r.id)}
+                  >
+                    Przywróć
+                  </button>
+                )}
+
+                {r.subscribersCount === 0 ? (
+                  <button
+                    className="px-3 py-2 rounded-md border bg-background hover:bg-muted text-sm text-destructive"
+                    onClick={() => requestDelete(r.id)}
+                    title="Brak sprzedaży — można usunąć."
+                  >
+                    Usuń
+                  </button>
+                ) : null}
+              </div>
             </div>
           </div>
         ))}
@@ -242,6 +281,29 @@ export default function ServicesListPage() {
       confirmLabel={decisionCtx?.kind === "archive" ? "Archiwizuj" : "Przywróć"}
       onClose={() => setDecisionOpen(false)}
       onConfirm={applyDecision}
+      />
+
+
+      <SimpleModal
+        open={deleteOpen}
+        title="Usuń usługę"
+        description="Możesz usunąć tylko usługę, która nigdy nie była sprzedana (abonenci = 0). Ślepe UI — tylko w pamięci."
+        onClose={() => setDeleteOpen(false)}
+        children={
+          <div className="text-sm text-muted-foreground">
+            Ta akcja usuwa usługę wyłącznie z lokalnego stanu UI (brak backendu).
+          </div>
+        }
+        footer={
+          <div className="flex justify-end gap-2">
+            <button className="px-3 py-2 rounded-md border" onClick={() => setDeleteOpen(false)}>
+              Anuluj
+            </button>
+            <button className="px-3 py-2 rounded-md bg-destructive text-destructive-foreground" onClick={doDelete}>
+              Usuń
+            </button>
+          </div>
+        }
       />
     </div>
   );

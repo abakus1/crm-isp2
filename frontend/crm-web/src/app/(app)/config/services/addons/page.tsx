@@ -1,7 +1,8 @@
 "use client";
 
 import Link from "next/link";
-import { useMemo, useState } from "react";
+import { useRouter, useSearchParams } from "next/navigation";
+import { useEffect, useMemo, useRef, useState } from "react";
 
 import { EffectiveAtModal, EffectiveAtDecision } from "@/components/services/EffectiveAtModal";
 import { PlanEditorModal } from "@/components/services/PlanEditorModal";
@@ -16,6 +17,10 @@ export default function AddonPlansPage() {
   const [families] = useState<ServiceFamily[]>(seedFamilies());
   const [terms] = useState<ServiceTerm[]>(seedTerms());
   const [plans, setPlans] = useState<ServicePlan[]>(seedPlans());
+
+  const router = useRouter();
+  const searchParams = useSearchParams();
+  const autoOpenedRef = useRef(false);
 
   const [filterStatus, setFilterStatus] = useState<"all" | "active" | "archived">("active");
   const [q, setQ] = useState<string>("");
@@ -54,6 +59,23 @@ export default function AddonPlansPage() {
   const [editorOpen, setEditorOpen] = useState(false);
   const [editorMode, setEditorMode] = useState<"new" | "edit">("new");
   const [editing, setEditing] = useState<ServicePlan | null>(null);
+
+  useEffect(() => {
+    const editId = searchParams.get("edit");
+    if (!editId) return;
+    if (autoOpenedRef.current) return;
+
+    const found = plans.find((p) => p.id === editId && p.type === "addon");
+    if (!found) return;
+
+    autoOpenedRef.current = true;
+    setEditing(found);
+    setEditorMode("edit");
+    setEditorOpen(true);
+
+    router.replace("/config/services/addons");
+  }, [searchParams, plans, router]);
+
 
   function applyBulk(action: "archive" | "restore", decision: EffectiveAtDecision) {
     const ids = new Set(selectedIds);
