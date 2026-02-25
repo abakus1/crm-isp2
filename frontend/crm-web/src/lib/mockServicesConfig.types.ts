@@ -50,4 +50,21 @@ export type ServicePlan = {
   // IP policy (UI-only, provisioning layer later)
   ipPolicy?: IpPolicy;
   ipCount?: number; // default 1
+
+  // Post-term pricing policy (UI-only for now)
+  postTermIncreaseAmount?: number; // e.g. +10 PLN after term
+  isCyclic?: boolean; // if true, increase repeats yearly/monthly (UI toggle)
+
+  // Indefinite (no-term) price + activation fee (UI model)
+  indefiniteMonthlyPrice?: number;
+  indefiniteActivationFee?: number;
+
+  // Line speed (UI model for Internet plans)
+  downloadBps?: number;
+  uploadBps?: number;
+
+  // Device requirements (UI model for addons like ONT/STB)
+  requiresDevice?: boolean;
+  allowedDeviceCategories?: string[];
+
 };

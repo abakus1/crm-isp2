@@ -10,10 +10,10 @@ import type { ServiceFamily, ServicePlan, ServiceTerm } from "@/lib/mockServices
 type ServiceRow = {
   id: string;
   name: string;
-  type: "primary" | "addon";
+  type: ServicePlan["type"];
   familyName: string;
   termName: string;
-  status: "active" | "archived";
+  status: ServicePlan["status"];
   subscribersCount: number;
   effectiveFrom: string;
   month1Price: number;
@@ -32,13 +32,9 @@ export default function ServicesListPage() {
   const [plans, setPlans] = useState<ServicePlan[]>(seedPlans());
 
   const [filterStatus, setFilterStatus] = useState<"all" | "active" | "archived">("active");
-  const [filterType, setFilterType] = useState<"all" | "primary" | "addon">("all");
   const [q, setQ] = useState<string>("");
 
-  const [selected, setSelected] = useState<Record<string, boolean>>({});
-  const selectedIds = useMemo(() => Object.keys(selected).filter((k) => selected[k]), [selected]);
-
-  const famById = useMemo(() => new Map(families.map((f) => [f.id, f])), [families]);
+  const familyById = useMemo(() => new Map(families.map((f) => [f.id, f])), [families]);
   const termById = useMemo(() => new Map(terms.map((t) => [t.id, t])), [terms]);
 
   const rows: ServiceRow[] = useMemo(() => {
@@ -48,185 +44,204 @@ export default function ServicesListPage() {
         id: p.id,
         name: p.name,
         type: p.type,
-        familyName: famById.get(p.familyId)?.name || "—",
+        familyName: familyById.get(p.familyId)?.name || "—",
         termName: termById.get(p.termId)?.name || "—",
         status: p.status,
-        subscribersCount: p.subscribersCount,
+        subscribersCount: p.subscribersCount ?? 0,
         effectiveFrom: p.effectiveFrom,
         month1Price: p.monthPrices?.[0] ?? 0,
         activationFee: p.activationFee ?? 0,
-        saleFrom: p.saleFrom,
+        saleFrom: p.saleFrom ?? "",
         saleTo: p.saleTo ?? null,
       }))
       .filter((r) => (filterStatus === "all" ? true : r.status === filterStatus))
-      .filter((r) => (filterType === "all" ? true : r.type === filterType))
-      .filter((r) => (needle ? r.name.toLowerCase().includes(needle) : true))
-      .sort((a, b) => a.name.localeCompare(b.name));
-  }, [plans, famById, termById, filterStatus, filterType, q]);
+      .filter((r) => {
+        if (!needle) return true;
+        const hay = `${r.name} ${r.familyName} ${r.termName}`.toLowerCase();
+        return hay.includes(needle);
+      });
+  }, [plans, familyById, termById, filterStatus, q]);
 
-  const [modalOpen, setModalOpen] = useState(false);
-  const [bulkAction, setBulkAction] = useState<"archive" | "restore" | null>(null);
+  const [decisionOpen, setDecisionOpen] = useState(false);
+  const [decisionCtx, setDecisionCtx] = useState<{
+    kind: "archive" | "restore";
+    planId: string;
+  } | null>(null);
 
-  function applyBulk(action: "archive" | "restore", decision: EffectiveAtDecision) {
-    const ids = new Set(selectedIds);
+  function askArchive(planId: string) {
+    setDecisionCtx({ kind: "archive", planId });
+    setDecisionOpen(true);
+  }
+
+  function askRestore(planId: string) {
+    setDecisionCtx({ kind: "restore", planId });
+    setDecisionOpen(true);
+  }
+
+  function todayIso() {
+  return new Date().toISOString().slice(0, 10);
+  }
+
+  function resolveEffectiveFrom(decision: EffectiveAtDecision): string {
+    // EffectiveAtDecision to union: np. { mode: "now" } | { mode: "at"; effectiveAt: string }
+    // TS: nie zakładamy, że effectiveAt istnieje zawsze.
+    if ((decision as any).effectiveAt) return (decision as any).effectiveAt as string;
+    return todayIso();
+  }
+
+  function applyDecision(decision: EffectiveAtDecision) {
+    if (!decisionCtx) return;
+
+    const { kind, planId } = decisionCtx;
+    const eff = resolveEffectiveFrom(decision);
+
     setPlans((prev) =>
       prev.map((p) => {
-        if (!ids.has(p.id)) return p;
-        const nextStatus = action === "archive" ? "archived" : "active";
-        const effectiveFrom = decision.mode === "now" ? new Date().toISOString().slice(0, 10) : decision.effectiveAtIso;
-        return { ...p, status: nextStatus, effectiveFrom };
+        if (p.id !== planId) return p;
+
+        const nextStatus = kind === "archive" ? "archived" : "active";
+        return {
+          ...p,
+          status: nextStatus,
+          effectiveFrom: eff,
+        };
       })
     );
-    setSelected({});
+
+    setDecisionOpen(false);
+    setDecisionCtx(null);
   }
 
   return (
     <div className="p-6 space-y-4">
-      <div className="flex items-start justify-between gap-3">
+      <div className="flex items-center justify-between gap-4">
         <div>
-          <div className="text-sm font-semibold">Konfiguracja → Usługi → Lista usług</div>
-          <div className="text-xs text-muted-foreground">
-            Ślepe UI. Dane są mockowane i trzymane tylko w pamięci przeglądarki.
+          <h1 className="text-xl font-semibold">Usługi</h1>
+          <div className="text-sm text-muted-foreground">
+            Lista wszystkich planów usług (główne + dodatki). Widok operatorski, bez backendu.
           </div>
         </div>
-        <Link className="text-sm underline" href="/config/services">
-          Wróć
-        </Link>
+
+        <div className="flex items-center gap-2">
+          <Link
+            href="/config/services/families"
+            className="px-3 py-2 rounded-md border bg-background hover:bg-muted text-sm"
+          >
+            Rodziny
+          </Link>
+          <Link
+            href="/config/services/terms"
+            className="px-3 py-2 rounded-md border bg-background hover:bg-muted text-sm"
+          >
+            Okresy umowy
+          </Link>
+          <Link
+            href="/config/services/primary"
+            className="px-3 py-2 rounded-md border bg-background hover:bg-muted text-sm"
+          >
+            Usługi główne
+          </Link>
+          <Link
+            href="/config/services/addons"
+            className="px-3 py-2 rounded-md border bg-background hover:bg-muted text-sm"
+          >
+            Dodatki
+          </Link>
+        </div>
       </div>
 
-      <div className="flex flex-wrap items-end gap-3">
-        <div>
+      <div className="flex items-end gap-3 flex-wrap">
+        <div className="flex flex-col gap-1">
+          <div className="text-xs text-muted-foreground">Status</div>
+          <div className="flex gap-2">
+            {(["active", "archived", "all"] as const).map((s) => (
+              <button
+                key={s}
+                className={`px-3 py-2 rounded-md border text-sm ${
+                  filterStatus === s ? "bg-muted" : "bg-background hover:bg-muted"
+                }`}
+                onClick={() => setFilterStatus(s)}
+              >
+                {s === "all" ? "Wszystkie" : formatStatus(s)}
+              </button>
+            ))}
+          </div>
+        </div>
+
+        <div className="flex-1 min-w-[220px] flex flex-col gap-1">
           <div className="text-xs text-muted-foreground">Szukaj</div>
           <input
+            className="w-full px-3 py-2 rounded-md border bg-background"
             value={q}
             onChange={(e) => setQ(e.target.value)}
-            placeholder="np. Internet 300"
-            className="mt-1 rounded-md border px-3 py-2 text-sm w-64"
+            placeholder="np. Internet, TV, 24 miesiące..."
           />
         </div>
-
-        <div>
-          <div className="text-xs text-muted-foreground">Status</div>
-          <select
-            value={filterStatus}
-            onChange={(e) => setFilterStatus(e.target.value as any)}
-            className="mt-1 rounded-md border px-3 py-2 text-sm"
-          >
-            <option value="active">Aktywne</option>
-            <option value="archived">Archiwalne</option>
-            <option value="all">Wszystkie</option>
-          </select>
-        </div>
-
-        <div>
-          <div className="text-xs text-muted-foreground">Typ</div>
-          <select
-            value={filterType}
-            onChange={(e) => setFilterType(e.target.value as any)}
-            className="mt-1 rounded-md border px-3 py-2 text-sm"
-          >
-            <option value="all">Wszystkie</option>
-            <option value="primary">Główne</option>
-            <option value="addon">Dodatkowe</option>
-          </select>
-        </div>
-
-        {selectedIds.length > 0 && (
-          <div className="ml-auto flex items-center gap-2 rounded-lg border bg-muted/20 px-3 py-2">
-            <div className="text-sm">Zaznaczone: {selectedIds.length}</div>
-            <button
-              className="px-3 py-1.5 rounded-md border"
-              onClick={() => {
-                setBulkAction("archive");
-                setModalOpen(true);
-              }}
-            >
-              Archiwizuj
-            </button>
-            <button
-              className="px-3 py-1.5 rounded-md border"
-              onClick={() => {
-                setBulkAction("restore");
-                setModalOpen(true);
-              }}
-            >
-              Przywróć
-            </button>
-            <button className="px-3 py-1.5 rounded-md border" onClick={() => setSelected({})}>
-              Wyczyść
-            </button>
-          </div>
-        )}
       </div>
 
       <div className="rounded-xl border overflow-hidden">
-        <table className="w-full text-sm">
-          <thead className="bg-muted/40">
-            <tr>
-              <th className="p-3 w-10"></th>
-              <th className="p-3 text-left">Usługa</th>
-              <th className="p-3 text-left">Typ</th>
-              <th className="p-3 text-left">Kategoria</th>
-              <th className="p-3 text-left">Okres</th>
-              <th className="p-3 text-left">Status</th>
-              <th className="p-3 text-right">Subskrybenci</th>
-              <th className="p-3 text-right">M1 (zł)</th>
-              <th className="p-3 text-right">Aktywacja (zł)</th>
-              <th className="p-3 text-left">Sprzedaż (od–do)</th>
-              <th className="p-3 text-left">Obowiązuje od</th>
-            </tr>
-          </thead>
-          <tbody>
-            {rows.map((r) => (
-              <tr key={r.id} className="border-t">
-                <td className="p-3">
-                  <input
-                    type="checkbox"
-                    checked={!!selected[r.id]}
-                    onChange={(e) => setSelected((prev) => ({ ...prev, [r.id]: e.target.checked }))}
-                  />
-                </td>
-                <td className="p-3">
-                  <div className="font-medium">{r.name}</div>
-                  <div className="text-xs text-muted-foreground">{r.id}</div>
-                </td>
-                <td className="p-3">{r.type === "primary" ? <Pill>Główna</Pill> : <Pill>Dodatkowa</Pill>}</td>
-                <td className="p-3">{r.familyName}</td>
-                <td className="p-3">{r.termName}</td>
-                <td className="p-3">{formatStatus(r.status)}</td>
-                <td className="p-3 text-right tabular-nums">{r.subscribersCount}</td>
-                <td className="p-3 text-right tabular-nums">{r.month1Price.toFixed(2)}</td>
-                <td className="p-3 text-right tabular-nums">{r.activationFee.toFixed(2)}</td>
-                <td className="p-3">
-                  <div className="tabular-nums">{r.saleFrom}</div>
-                  <div className="tabular-nums text-xs text-muted-foreground">{r.saleTo ?? "—"}</div>
-                </td>
-                <td className="p-3">{r.effectiveFrom}</td>
-              </tr>
-            ))}
-            {rows.length === 0 && (
-              <tr>
-                <td colSpan={11} className="p-6 text-center text-muted-foreground">
-                  Brak wyników
-                </td>
-              </tr>
-            )}
-          </tbody>
-        </table>
+        <div className="grid grid-cols-12 gap-2 px-4 py-3 text-xs font-medium bg-muted">
+          <div className="col-span-3">Nazwa</div>
+          <div className="col-span-2">Rodzina</div>
+          <div className="col-span-2">Okres</div>
+          <div className="col-span-1">Typ</div>
+          <div className="col-span-1">Status</div>
+          <div className="col-span-1">Abonenci</div>
+          <div className="col-span-1">Cena m1</div>
+          <div className="col-span-1 text-right">Akcje</div>
+        </div>
+
+        {rows.map((r) => (
+          <div key={r.id} className="grid grid-cols-12 gap-2 px-4 py-3 border-t items-center">
+            <div className="col-span-3">
+              <div className="font-medium">{r.name}</div>
+              <div className="text-xs text-muted-foreground">Aktywne od: {r.effectiveFrom}</div>
+            </div>
+
+            <div className="col-span-2">{r.familyName}</div>
+            <div className="col-span-2">{r.termName}</div>
+
+            <div className="col-span-1">
+              <Pill>{r.type}</Pill>
+            </div>
+
+            <div className="col-span-1">{formatStatus(r.status)}</div>
+
+            <div className="col-span-1">{r.subscribersCount}</div>
+
+            <div className="col-span-1">
+              <div className="text-sm">{r.month1Price} PLN</div>
+              <div className="text-xs text-muted-foreground">Akt.: {r.activationFee} PLN</div>
+            </div>
+
+            <div className="col-span-1 text-right">
+              {r.status === "active" ? (
+                <button
+                  className="px-3 py-2 rounded-md border bg-background hover:bg-muted text-sm"
+                  onClick={() => askArchive(r.id)}
+                >
+                  Archiwizuj
+                </button>
+              ) : (
+                <button
+                  className="px-3 py-2 rounded-md border bg-background hover:bg-muted text-sm"
+                  onClick={() => askRestore(r.id)}
+                >
+                  Przywróć
+                </button>
+              )}
+            </div>
+          </div>
+        ))}
       </div>
 
       <EffectiveAtModal
-        open={modalOpen}
-        title={bulkAction === "archive" ? "Archiwizacja (grupowo)" : "Przywracanie (grupowo)"}
-        description="Wybierz kiedy zmiana ma obowiązywać. To jest ślepe UI — backend podepniemy później."
-        confirmLabel={bulkAction === "archive" ? "Zaplanuj archiwizację" : "Zaplanuj przywrócenie"}
-        onClose={() => setModalOpen(false)}
-        onConfirm={(decision) => {
-          if (!bulkAction) return;
-          applyBulk(bulkAction, decision);
-          setModalOpen(false);
-          setBulkAction(null);
-        }}
+      open={decisionOpen}
+      title={decisionCtx?.kind === "archive" ? "Archiwizuj usługę" : "Przywróć usługę"}
+      description="Ustaw od kiedy zmiana ma obowiązywać."
+      confirmLabel={decisionCtx?.kind === "archive" ? "Archiwizuj" : "Przywróć"}
+      onClose={() => setDecisionOpen(false)}
+      onConfirm={applyDecision}
       />
     </div>
   );
