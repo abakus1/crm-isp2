@@ -5,7 +5,8 @@ import { useMemo, useState } from "react";
 
 import { EffectiveAtModal, EffectiveAtDecision } from "@/components/services/EffectiveAtModal";
 import { SimpleModal } from "@/components/SimpleModal";
-import { formatStatus, seedFamilies, seedPlans, ServiceFamily } from "@/lib/mockServicesConfig";
+import { formatStatus, seedFamilies, seedPlans } from "@/lib/mockServicesConfig";
+import type { ServiceFamily } from "@/lib/mockServicesConfig.types";
 
 function uid(prefix: string) {
   return `${prefix}-${Math.random().toString(16).slice(2, 10)}`;

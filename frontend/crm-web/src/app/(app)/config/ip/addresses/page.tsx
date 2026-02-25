@@ -10,8 +10,8 @@ import {
   IpAddress,
   IpAddressMode,
   IpAddressStatus,
-  IpNetworkType,
-  IpNetworkUsage,
+  IpAssignmentMode,
+  IpPoolKind,
   subscribeIpam,
   unassignAddress,
 } from "@/lib/mockIpam";
@@ -31,20 +31,25 @@ function badgeClass(kind: string) {
   if (kind === "FREE") return "bg-emerald-600/15 text-emerald-700 border-emerald-600/20";
   if (kind === "ASSIGNED") return "bg-blue-600/15 text-blue-700 border-blue-600/20";
   if (kind === "RESERVED") return "bg-amber-600/15 text-amber-800 border-amber-600/20";
-  if (kind === "PUBLIC") return "bg-purple-600/15 text-purple-700 border-purple-600/20";
-  if (kind === "PRIVATE") return "bg-slate-600/15 text-slate-700 border-slate-600/20";
+
+  // pool kinds
+  if (kind === "CUSTOMER_NAT") return "bg-slate-600/15 text-slate-700 border-slate-600/20";
+  if (kind === "CUSTOMER_PUBLIC") return "bg-purple-600/15 text-purple-700 border-purple-600/20";
+  if (kind === "INFRA") return "bg-cyan-600/15 text-cyan-700 border-cyan-600/20";
+
+  // assignment modes
+  if (kind === "DHCP") return "bg-violet-600/15 text-violet-700 border-violet-600/20";
+  if (kind === "PPPOE") return "bg-fuchsia-600/15 text-fuchsia-700 border-fuchsia-600/20";
+  if (kind === "STATIC") return "bg-sky-600/15 text-sky-700 border-sky-600/20";
+
   return "bg-muted text-foreground border-border";
 }
 
-function Badge({
-  children,
-  tone,
-}: {
-  children: any;
-  tone?: string;
-}) {
+function Badge({ children, tone }: { children: any; tone?: string }) {
   return (
-    <span className={`inline-flex items-center px-2 py-0.5 rounded-md border text-xs ${badgeClass(tone ?? "")}`}>{children}</span>
+    <span className={`inline-flex items-center px-2 py-0.5 rounded-md border text-xs ${badgeClass(tone ?? "")}`}>
+      {children}
+    </span>
   );
 }
 
@@ -54,14 +59,24 @@ function todayIso() {
   return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
 }
 
+function prettyPoolKind(k: IpPoolKind) {
+  if (k === "CUSTOMER_NAT") return "CUSTOMER_NAT";
+  if (k === "CUSTOMER_PUBLIC") return "CUSTOMER_PUBLIC";
+  return "INFRA";
+}
+
+function prettyAssignMode(m: IpAssignmentMode) {
+  return m;
+}
+
 export default function IpAddressesPage() {
   const ipam = useIpam();
 
   const [q, setQ] = useState("");
   const [filterStatus, setFilterStatus] = useState<IpAddressStatus | "all">("all");
   const [filterMode, setFilterMode] = useState<IpAddressMode | "all">("all");
-  const [filterType, setFilterType] = useState<IpNetworkType | "all">("all");
-  const [filterUsage, setFilterUsage] = useState<IpNetworkUsage | "all">("all");
+  const [filterPoolKind, setFilterPoolKind] = useState<IpPoolKind | "all">("all");
+  const [filterAssignMode, setFilterAssignMode] = useState<IpAssignmentMode | "all">("all");
 
   const networksById = useMemo(() => new Map(ipam.networks.map((n) => [n.id, n])), [ipam.networks]);
 
@@ -77,14 +92,22 @@ export default function IpAddressesPage() {
 
   const view = useMemo(() => {
     const needle = q.trim().toLowerCase();
+
     return ipam.addresses
       .filter((a) => (filterStatus === "all" ? true : a.status === filterStatus))
-      .filter((a) => (filterMode === "all" ? true : (a.mode ?? "") === filterMode))
+      .filter((a) => {
+        if (filterMode === "all") return true;
+        const net = networksById.get(a.networkId);
+        const effective = (a.mode ?? (net?.assignmentMode ?? "")) as any;
+        return effective === filterMode;
+      })
       .filter((a) => {
         const net = networksById.get(a.networkId);
         if (!net) return true;
-        if (filterType !== "all" && net.type !== filterType) return false;
-        if (filterUsage !== "all" && net.usage !== filterUsage) return false;
+
+        if (filterPoolKind !== "all" && net.poolKind !== filterPoolKind) return false;
+        if (filterAssignMode !== "all" && net.assignmentMode !== filterAssignMode) return false;
+
         return true;
       })
       .filter((a) => {
@@ -95,32 +118,27 @@ export default function IpAddressesPage() {
           a.description,
           a.status,
           a.mode ?? "",
+          // też dorzuć sieciowe assignmentMode, bo to “źródło prawdy”
+          net?.assignmentMode ?? "",
           a.customerName ?? "",
           a.mac ?? "",
           a.pppoeLogin ?? "",
           net?.cidr ?? "",
           net?.description ?? "",
+          net?.poolKind ?? "",
         ]
           .join(" ")
           .toLowerCase();
         return hay.includes(needle);
       })
       .sort((x, y) => x.ip.localeCompare(y.ip));
-  }, [
-    ipam.addresses,
-    q,
-    filterStatus,
-    filterMode,
-    filterType,
-    filterUsage,
-    networksById,
-  ]);
+  }, [ipam.addresses, q, filterStatus, filterMode, filterPoolKind, filterAssignMode, networksById]);
 
   // ---------- Details modal ----------
   const [detailsOpen, setDetailsOpen] = useState(false);
   const [detailsId, setDetailsId] = useState<string | null>(null);
   const selected = useMemo(() => ipam.addresses.find((a) => a.id === detailsId) ?? null, [ipam.addresses, detailsId]);
-  const selectedNet = selected ? networksById.get(selected.networkId) ?? null : null;
+  const selectedNet = selected ? (networksById.get(selected.networkId) as any) ?? null : null;
 
   // Historia adresu (UI-only)
   const [historyOpen, setHistoryOpen] = useState(false);
@@ -152,7 +170,11 @@ export default function IpAddressesPage() {
     setAssignOpen(true);
     setAssignErr(null);
     setCustomerName(selected.customerName ?? "");
-    setMode(selected.mode ?? "STATIC");
+
+    // domyślny mode: preferuj to co ma adres, a jak nie ma – to assignmentMode z sieci
+    const fallbackMode = (selectedNet?.assignmentMode ?? "STATIC") as IpAddressMode;
+    setMode((selected.mode ?? fallbackMode) as IpAddressMode);
+
     setExpiresAtIso(selected.expiresAtIso ?? "");
     setDesc(selected.description ?? "");
     setPppoeLogin(selected.pppoeLogin ?? "");
@@ -217,7 +239,7 @@ export default function IpAddressesPage() {
       </div>
 
       <div className="rounded-xl border p-4">
-        <div className="grid grid-cols-1 md:grid-cols-5 gap-3">
+        <div className="grid grid-cols-1 md:grid-cols-6 gap-3">
           <div className="md:col-span-2">
             <div className="text-xs text-muted-foreground">Szukaj</div>
             <input
@@ -227,6 +249,7 @@ export default function IpAddressesPage() {
               className="mt-1 rounded-md border px-3 py-2 text-sm w-80"
             />
           </div>
+
           <div>
             <div className="text-xs text-muted-foreground">Status</div>
             <select value={filterStatus} onChange={(e) => setFilterStatus(e.target.value as any)} className="mt-1 rounded-md border px-3 py-2 text-sm">
@@ -236,8 +259,9 @@ export default function IpAddressesPage() {
               <option value="RESERVED">RESERVED</option>
             </select>
           </div>
+
           <div>
-            <div className="text-xs text-muted-foreground">Tryb</div>
+            <div className="text-xs text-muted-foreground">Tryb (effective)</div>
             <select value={filterMode} onChange={(e) => setFilterMode(e.target.value as any)} className="mt-1 rounded-md border px-3 py-2 text-sm">
               <option value="all">Wszystkie</option>
               <option value="DHCP">DHCP</option>
@@ -245,20 +269,28 @@ export default function IpAddressesPage() {
               <option value="STATIC">Static</option>
             </select>
           </div>
+
           <div>
-            <div className="text-xs text-muted-foreground">Public/Private</div>
-            <select value={filterType} onChange={(e) => setFilterType(e.target.value as any)} className="mt-1 rounded-md border px-3 py-2 text-sm">
+            <div className="text-xs text-muted-foreground">Pool kind</div>
+            <select value={filterPoolKind} onChange={(e) => setFilterPoolKind(e.target.value as any)} className="mt-1 rounded-md border px-3 py-2 text-sm">
               <option value="all">Wszystkie</option>
-              <option value="PUBLIC">Public</option>
-              <option value="PRIVATE">Private</option>
+              <option value="CUSTOMER_NAT">CUSTOMER_NAT</option>
+              <option value="CUSTOMER_PUBLIC">CUSTOMER_PUBLIC</option>
+              <option value="INFRA">INFRA</option>
             </select>
           </div>
+
           <div>
-            <div className="text-xs text-muted-foreground">Przeznaczenie</div>
-            <select value={filterUsage} onChange={(e) => setFilterUsage(e.target.value as any)} className="mt-1 rounded-md border px-3 py-2 text-sm">
+            <div className="text-xs text-muted-foreground">Assignment mode (sieć)</div>
+            <select
+              value={filterAssignMode}
+              onChange={(e) => setFilterAssignMode(e.target.value as any)}
+              className="mt-1 rounded-md border px-3 py-2 text-sm"
+            >
               <option value="all">Wszystkie</option>
-              <option value="CLIENT">Kliencka</option>
-              <option value="GEMINI">GEMINI</option>
+              <option value="DHCP">DHCP</option>
+              <option value="PPPOE">PPPOE</option>
+              <option value="STATIC">STATIC</option>
             </select>
           </div>
         </div>
@@ -272,8 +304,9 @@ export default function IpAddressesPage() {
               <th className="p-3 text-left">IP</th>
               <th className="p-3 text-left">Opis</th>
               <th className="p-3 text-left">Klasa sieci</th>
-              <th className="p-3 text-left">Public/Private</th>
-              <th className="p-3 text-left">DHCP/PPPoE/Static</th>
+              <th className="p-3 text-left">Pool kind</th>
+              <th className="p-3 text-left">Assignment</th>
+              <th className="p-3 text-left">Tryb (addr/effective)</th>
               <th className="p-3 text-left">Klient</th>
               <th className="p-3 text-left">Przydzielono</th>
               <th className="p-3 text-left">Wygasa</th>
@@ -285,6 +318,8 @@ export default function IpAddressesPage() {
             {view.map((a, idx) => {
               const net = networksById.get(a.networkId);
               const free = freeByNetwork.get(a.networkId) ?? 0;
+              const effectiveMode = (a.mode ?? (net?.assignmentMode ?? "")) as any;
+
               return (
                 <tr key={a.id} className="border-t">
                   <td className="p-3 text-muted-foreground">{idx + 1}</td>
@@ -294,16 +329,34 @@ export default function IpAddressesPage() {
                   </td>
                   <td className="p-3">{a.description || "–"}</td>
                   <td className="p-3">{net?.description || <span className="text-muted-foreground">–</span>}</td>
+
                   <td className="p-3">
-                    <Badge tone={net?.type ?? ""}>{net?.type ?? "–"}</Badge>
-                    <div className="text-xs text-muted-foreground mt-1">{net?.usage === "GEMINI" ? "GEMINI" : "CLIENT"}</div>
+                    {net?.poolKind ? (
+                      <Badge tone={net.poolKind}>{prettyPoolKind(net.poolKind)}</Badge>
+                    ) : (
+                      <span className="text-xs text-muted-foreground">–</span>
+                    )}
                   </td>
+
                   <td className="p-3">
-                    {a.mode ? <Badge>{a.mode}</Badge> : <span className="text-xs text-muted-foreground">–</span>}
+                    {net?.assignmentMode ? (
+                      <Badge tone={net.assignmentMode}>{prettyAssignMode(net.assignmentMode)}</Badge>
+                    ) : (
+                      <span className="text-xs text-muted-foreground">–</span>
+                    )}
+                  </td>
+
+                  <td className="p-3">
+                    {a.mode ? <Badge tone={a.mode}>{a.mode}</Badge> : <span className="text-xs text-muted-foreground">–</span>}
+                    <div className="text-xs text-muted-foreground mt-1">
+                      <Badge tone={effectiveMode}>{effectiveMode || "–"}</Badge>
+                      <span className="ml-2 text-muted-foreground">(effective)</span>
+                    </div>
                     <div className="text-xs text-muted-foreground mt-1">
                       <Badge tone={a.status}>{a.status}</Badge>
                     </div>
                   </td>
+
                   <td className="p-3">{a.customerName || <span className="text-muted-foreground">–</span>}</td>
                   <td className="p-3">{a.assignedAtIso || <span className="text-muted-foreground">–</span>}</td>
                   <td className="p-3">{a.expiresAtIso || <span className="text-muted-foreground">–</span>}</td>
@@ -318,7 +371,7 @@ export default function IpAddressesPage() {
             })}
             {view.length === 0 && (
               <tr>
-                <td className="p-4 text-sm text-muted-foreground" colSpan={11}>
+                <td className="p-4 text-sm text-muted-foreground" colSpan={12}>
                   Brak wyników.
                 </td>
               </tr>
@@ -368,9 +421,9 @@ export default function IpAddressesPage() {
                 <div className="text-xs text-muted-foreground">Sieć</div>
                 <div className="font-mono text-sm mt-1">{selectedNet?.cidr ?? "–"}</div>
                 <div className="text-xs text-muted-foreground mt-1">{selectedNet?.description || "–"}</div>
-                <div className="flex gap-2 mt-2">
-                  <Badge tone={selectedNet?.type ?? ""}>{selectedNet?.type ?? "–"}</Badge>
-                  <Badge>{selectedNet?.usage === "GEMINI" ? "GEMINI" : "CLIENT"}</Badge>
+                <div className="flex flex-wrap gap-2 mt-2">
+                  {selectedNet?.poolKind ? <Badge tone={selectedNet.poolKind}>{prettyPoolKind(selectedNet.poolKind)}</Badge> : <Badge>–</Badge>}
+                  {selectedNet?.assignmentMode ? <Badge tone={selectedNet.assignmentMode}>{prettyAssignMode(selectedNet.assignmentMode)}</Badge> : <Badge>–</Badge>}
                 </div>
               </div>
 
@@ -379,7 +432,7 @@ export default function IpAddressesPage() {
                 <div className="font-mono text-sm mt-1">{selected.ip}</div>
                 <div className="flex gap-2 mt-2">
                   <Badge tone={selected.status}>{selected.status}</Badge>
-                  {selected.mode ? <Badge>{selected.mode}</Badge> : <Badge>–</Badge>}
+                  {selected.mode ? <Badge tone={selected.mode}>{selected.mode}</Badge> : <Badge>–</Badge>}
                 </div>
               </div>
             </div>
@@ -452,6 +505,11 @@ export default function IpAddressesPage() {
                       <option value="PPPOE">PPPoE</option>
                       <option value="STATIC">Static</option>
                     </select>
+                    {selectedNet?.assignmentMode ? (
+                      <div className="text-xs text-muted-foreground mt-1">
+                        Sieć ma assignmentMode: <span className="font-mono">{selectedNet.assignmentMode}</span> (docelowo provisioning bierze to jako źródło prawdy).
+                      </div>
+                    ) : null}
                   </div>
 
                   <div>
@@ -479,12 +537,22 @@ export default function IpAddressesPage() {
                     <>
                       <div>
                         <div className="text-xs text-muted-foreground">PPPoE login</div>
-                        <input value={pppoeLogin} onChange={(e) => setPppoeLogin(e.target.value)} className="mt-1 rounded-md border px-3 py-2 text-sm w-full" placeholder="auto" />
+                        <input
+                          value={pppoeLogin}
+                          onChange={(e) => setPppoeLogin(e.target.value)}
+                          className="mt-1 rounded-md border px-3 py-2 text-sm w-full"
+                          placeholder="auto"
+                        />
                         <div className="text-xs text-muted-foreground mt-1">Jeśli puste – system wygeneruje.</div>
                       </div>
                       <div>
                         <div className="text-xs text-muted-foreground">PPPoE hasło</div>
-                        <input value={pppoePassword} onChange={(e) => setPppoePassword(e.target.value)} className="mt-1 rounded-md border px-3 py-2 text-sm w-full" placeholder="auto" />
+                        <input
+                          value={pppoePassword}
+                          onChange={(e) => setPppoePassword(e.target.value)}
+                          className="mt-1 rounded-md border px-3 py-2 text-sm w-full"
+                          placeholder="auto"
+                        />
                         <div className="text-xs text-muted-foreground mt-1">Jeśli puste – system wygeneruje.</div>
                       </div>
                     </>
@@ -493,7 +561,12 @@ export default function IpAddressesPage() {
                   {mode === "DHCP" && (
                     <div>
                       <div className="text-xs text-muted-foreground">MAC</div>
-                      <input value={mac} onChange={(e) => setMac(e.target.value)} className="mt-1 rounded-md border px-3 py-2 text-sm w-full" placeholder="AA:BB:CC:DD:EE:FF" />
+                      <input
+                        value={mac}
+                        onChange={(e) => setMac(e.target.value)}
+                        className="mt-1 rounded-md border px-3 py-2 text-sm w-full"
+                        placeholder="AA:BB:CC:DD:EE:FF"
+                      />
                       <div className="text-xs text-muted-foreground mt-1">MAC identyfikuje urządzenie w DHCP.</div>
                     </div>
                   )}
@@ -570,7 +643,7 @@ export default function IpAddressesPage() {
                 </div>
                 <div className="text-xs text-muted-foreground mt-1">Kto: {ev.actor}</div>
                 {ev.note ? <div className="text-xs mt-1">{ev.note}</div> : null}
-                {(ev.before || ev.after) ? (
+                {ev.before || ev.after ? (
                   <div className="grid grid-cols-1 md:grid-cols-2 gap-2 mt-2 text-xs">
                     <div className="rounded-md border bg-muted/10 p-2">
                       <div className="text-muted-foreground">Przed</div>

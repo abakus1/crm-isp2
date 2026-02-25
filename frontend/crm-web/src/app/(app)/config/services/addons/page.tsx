@@ -5,15 +5,8 @@ import { useMemo, useState } from "react";
 
 import { EffectiveAtModal, EffectiveAtDecision } from "@/components/services/EffectiveAtModal";
 import { PlanEditorModal } from "@/components/services/PlanEditorModal";
-import {
-  formatStatus,
-  seedFamilies,
-  seedPlans,
-  seedTerms,
-  ServiceFamily,
-  ServicePlan,
-  ServiceTerm,
-} from "@/lib/mockServicesConfig";
+import { formatStatus, seedFamilies, seedPlans, seedTerms } from "@/lib/mockServicesConfig";
+import type { ServiceFamily, ServicePlan, ServiceTerm } from "@/lib/mockServicesConfig.types";
 
 function uid(prefix: string) {
   return `${prefix}-${Math.random().toString(16).slice(2, 10)}`;

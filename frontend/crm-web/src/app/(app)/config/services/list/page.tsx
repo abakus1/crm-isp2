@@ -4,15 +4,8 @@ import { useMemo, useState } from "react";
 import Link from "next/link";
 
 import { EffectiveAtModal, EffectiveAtDecision } from "@/components/services/EffectiveAtModal";
-import {
-  formatStatus,
-  seedFamilies,
-  seedPlans,
-  seedTerms,
-  ServiceFamily,
-  ServicePlan,
-  ServiceTerm,
-} from "@/lib/mockServicesConfig";
+import { formatStatus, seedFamilies, seedPlans, seedTerms } from "@/lib/mockServicesConfig";
+import type { ServiceFamily, ServicePlan, ServiceTerm } from "@/lib/mockServicesConfig.types";
 
 type ServiceRow = {
   id: string;

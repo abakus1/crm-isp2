@@ -8,9 +8,9 @@ import {
   createNetwork,
   deleteNetwork,
   getIpamState,
+  IpAssignmentMode,
   IpNetwork,
-  IpNetworkType,
-  IpNetworkUsage,
+  IpPoolKind,
   networkInfo,
   setIpamState,
   splitNetwork,
@@ -35,8 +35,8 @@ export default function IpNetworksPage() {
   const ipam = useIpam();
 
   const [q, setQ] = useState("");
-  const [filterType, setFilterType] = useState<"all" | IpNetworkType>("all");
-  const [filterUsage, setFilterUsage] = useState<"all" | IpNetworkUsage>("all");
+  const [filterPoolKind, setFilterPoolKind] = useState<"all" | IpPoolKind>("all");
+  const [filterAssignMode, setFilterAssignMode] = useState<"all" | IpAssignmentMode>("all");
 
   const freeByNetwork = useMemo(() => {
     const m = new Map<string, number>();
@@ -55,18 +55,32 @@ export default function IpNetworksPage() {
   const view = useMemo(() => {
     const needle = q.trim().toLowerCase();
     return ipam.networks
-      .filter((n) => (filterType === "all" ? true : n.type === filterType))
-      .filter((n) => (filterUsage === "all" ? true : n.usage === filterUsage))
+      .filter((n) => (filterPoolKind === "all" ? true : n.poolKind === filterPoolKind))
+      .filter((n) => (filterAssignMode === "all" ? true : n.assignmentMode === filterAssignMode))
       .filter((n) => {
         if (!needle) return true;
         return (
-          (n.cidr + " " + n.description + " " + n.gateway + " " + n.dns1 + " " + n.dns2)
+          (
+            n.cidr +
+            " " +
+            n.description +
+            " " +
+            n.gateway +
+            " " +
+            n.dns1 +
+            " " +
+            n.dns2 +
+            " " +
+            n.poolKind +
+            " " +
+            n.assignmentMode
+          )
             .toLowerCase()
             .includes(needle)
         );
       })
       .sort((a, b) => a.cidr.localeCompare(b.cidr));
-  }, [ipam.networks, q, filterType, filterUsage]);
+  }, [ipam.networks, q, filterPoolKind, filterAssignMode]);
 
   // ---------- Add/Edit modal ----------
   const [editOpen, setEditOpen] = useState(false);
@@ -74,8 +88,8 @@ export default function IpNetworksPage() {
   const [editId, setEditId] = useState<string | null>(null);
 
   const [cidr, setCidr] = useState("192.0.2.0/29");
-  const [type, setType] = useState<IpNetworkType>("PUBLIC");
-  const [usage, setUsage] = useState<IpNetworkUsage>("CLIENT");
+  const [poolKind, setPoolKind] = useState<IpPoolKind>("CUSTOMER_PUBLIC");
+  const [assignmentMode, setAssignmentMode] = useState<IpAssignmentMode>("PPPOE");
   const [desc, setDesc] = useState("");
   const [gateway, setGateway] = useState("");
   const [dns1, setDns1] = useState("1.1.1.1");
@@ -86,8 +100,8 @@ export default function IpNetworksPage() {
     setEditMode("new");
     setEditId(null);
     setCidr("192.0.2.0/29");
-    setType("PUBLIC");
-    setUsage("CLIENT");
+    setPoolKind("CUSTOMER_PUBLIC");
+    setAssignmentMode("PPPOE");
     setDesc("");
     setGateway("");
     setDns1("1.1.1.1");
@@ -100,8 +114,8 @@ export default function IpNetworksPage() {
     setEditMode("edit");
     setEditId(n.id);
     setCidr(n.cidr);
-    setType(n.type);
-    setUsage(n.usage);
+    setPoolKind(n.poolKind);
+    setAssignmentMode(n.assignmentMode);
     setDesc(n.description);
     setGateway(n.gateway);
     setDns1(n.dns1);
@@ -122,28 +136,31 @@ export default function IpNetworksPage() {
       if (editMode === "new") {
         const created = createNetwork({
           cidr,
-          type,
-          usage,
+          poolKind,
+          assignmentMode,
           description: desc,
           gateway,
           dns1,
           dns2,
         });
+
         // zapis do store
         const { network, addresses } = created;
         const existingCidrs = new Set(ipam.networks.map((x) => x.cidr));
         if (existingCidrs.has(network.cidr)) throw new Error("Taka sieć CIDR już istnieje");
+
         // broadcast liczy się automatycznie, ale info zostawiamy w labelce
         void info;
+
         setIpamState((prev) => ({
-        ...prev,
-        networks: [...prev.networks, network],
-        addresses: [...prev.addresses, ...addresses],
-      }));
+          ...prev,
+          networks: [...prev.networks, network],
+          addresses: [...prev.addresses, ...addresses],
+        }));
       } else if (editId) {
         updateNetwork(editId, {
-          type,
-          usage,
+          poolKind,
+          assignmentMode,
           description: desc,
           gateway,
           dns1,
@@ -210,8 +227,9 @@ export default function IpNetworksPage() {
         <div>
           <div className="text-sm font-semibold">Konfiguracja → Magazyn IP → Sieci IP</div>
           <div className="text-xs text-muted-foreground">
-            Dodajesz CIDR, ustawiasz gateway/DNS, a system generuje usable IP do magazynu. Sieć ma typ (Public/Private)
-            i przeznaczenie (Kliencka vs Gemini).
+            Dodajesz CIDR, ustawiasz gateway/DNS, a system generuje usable IP do magazynu.
+            Sieć ma <span className="font-mono">poolKind</span> (CUSTOMER_NAT / CUSTOMER_PUBLIC / INFRA)
+            oraz <span className="font-mono">assignmentMode</span> (DHCP / PPPOE / STATIC).
           </div>
         </div>
         <Link className="text-sm underline" href="/config/ip">
@@ -225,32 +243,36 @@ export default function IpNetworksPage() {
           <input
             value={q}
             onChange={(e) => setQ(e.target.value)}
-            placeholder="np. 10.10 / public / dns"
+            placeholder="np. 10.10 / customer / dns"
             className="mt-1 rounded-md border px-3 py-2 text-sm w-72"
           />
         </div>
+
         <div>
-          <div className="text-xs text-muted-foreground">Typ</div>
+          <div className="text-xs text-muted-foreground">Pool kind</div>
           <select
-            value={filterType}
-            onChange={(e) => setFilterType(e.target.value as any)}
+            value={filterPoolKind}
+            onChange={(e) => setFilterPoolKind(e.target.value as any)}
             className="mt-1 rounded-md border px-3 py-2 text-sm"
           >
             <option value="all">Wszystkie</option>
-            <option value="PUBLIC">Public</option>
-            <option value="PRIVATE">Private</option>
+            <option value="CUSTOMER_NAT">CUSTOMER_NAT</option>
+            <option value="CUSTOMER_PUBLIC">CUSTOMER_PUBLIC</option>
+            <option value="INFRA">INFRA</option>
           </select>
         </div>
+
         <div>
-          <div className="text-xs text-muted-foreground">Przeznaczenie</div>
+          <div className="text-xs text-muted-foreground">Assignment mode</div>
           <select
-            value={filterUsage}
-            onChange={(e) => setFilterUsage(e.target.value as any)}
+            value={filterAssignMode}
+            onChange={(e) => setFilterAssignMode(e.target.value as any)}
             className="mt-1 rounded-md border px-3 py-2 text-sm"
           >
             <option value="all">Wszystkie</option>
-            <option value="CLIENT">Kliencka</option>
-            <option value="GEMINI">Urządzenia Gemini</option>
+            <option value="DHCP">DHCP</option>
+            <option value="PPPOE">PPPOE</option>
+            <option value="STATIC">STATIC</option>
           </select>
         </div>
 
@@ -265,8 +287,8 @@ export default function IpNetworksPage() {
             <tr>
               <th className="p-3 text-left">CIDR</th>
               <th className="p-3 text-left">Opis</th>
-              <th className="p-3 text-left">Typ</th>
-              <th className="p-3 text-left">Przeznaczenie</th>
+              <th className="p-3 text-left">Pool kind</th>
+              <th className="p-3 text-left">Assignment</th>
               <th className="p-3 text-left">Gateway</th>
               <th className="p-3 text-left">DNS</th>
               <th className="p-3 text-right">Wolne</th>
@@ -279,6 +301,7 @@ export default function IpNetworksPage() {
               const total = totalByNetwork.get(n.id) ?? 0;
               const used = total - free;
               const info = networkInfo(n.cidr);
+
               return (
                 <tr key={n.id} className="border-t">
                   <td className="p-3">
@@ -286,27 +309,36 @@ export default function IpNetworksPage() {
                     <div className="text-xs text-muted-foreground">broadcast: {n.broadcast}</div>
                     <div className="text-xs text-muted-foreground">hosty: {info.usable}</div>
                   </td>
+
                   <td className="p-3">
                     <div className="font-medium">{n.description || "–"}</div>
                     <div className="text-xs text-muted-foreground">utw.: {n.createdAtIso}</div>
                   </td>
+
                   <td className="p-3">
-                    <Badge>{n.type}</Badge>
+                    <Badge>{n.poolKind}</Badge>
                   </td>
+
                   <td className="p-3">
-                    <Badge>{n.usage === "CLIENT" ? "CLIENT" : "GEMINI"}</Badge>
+                    <Badge>{n.assignmentMode}</Badge>
                   </td>
+
                   <td className="p-3 font-mono text-xs">{n.gateway}</td>
+
                   <td className="p-3">
                     <div className="font-mono text-xs">{n.dns1}</div>
                     <div className="font-mono text-xs text-muted-foreground">{n.dns2}</div>
                   </td>
+
                   <td className="p-3 text-right">
                     <div className="font-semibold">
                       {free}/{total}
                     </div>
-                    <div className="text-xs text-muted-foreground">użyte: {used} ({pct(used, total)})</div>
+                    <div className="text-xs text-muted-foreground">
+                      użyte: {used} ({pct(used, total)})
+                    </div>
                   </td>
+
                   <td className="p-3 text-right">
                     <div className="inline-flex gap-2">
                       <button className="px-3 py-1.5 rounded-md border" onClick={() => openEdit(n)}>
@@ -377,7 +409,9 @@ export default function IpNetworksPage() {
               placeholder="np. 203.0.113.0/28"
             />
             {editMode === "edit" ? (
-              <div className="text-xs text-muted-foreground mt-1">CIDR jest zablokowany w edycji (żeby nie mieszać magazynu).</div>
+              <div className="text-xs text-muted-foreground mt-1">
+                CIDR jest zablokowany w edycji (żeby nie mieszać magazynu).
+              </div>
             ) : null}
           </div>
 
@@ -392,23 +426,32 @@ export default function IpNetworksPage() {
           </div>
 
           <div>
-            <div className="text-xs text-muted-foreground">Typ</div>
-            <select value={type} onChange={(e) => setType(e.target.value as any)} className="mt-1 rounded-md border px-3 py-2 text-sm w-full">
-              <option value="PUBLIC">Public</option>
-              <option value="PRIVATE">Private (NAT/management)</option>
+            <div className="text-xs text-muted-foreground">Pool kind</div>
+            <select
+              value={poolKind}
+              onChange={(e) => setPoolKind(e.target.value as any)}
+              className="mt-1 rounded-md border px-3 py-2 text-sm w-full"
+            >
+              <option value="CUSTOMER_NAT">CUSTOMER_NAT</option>
+              <option value="CUSTOMER_PUBLIC">CUSTOMER_PUBLIC</option>
+              <option value="INFRA">INFRA</option>
             </select>
           </div>
 
           <div>
-            <div className="text-xs text-muted-foreground">Przeznaczenie</div>
+            <div className="text-xs text-muted-foreground">Assignment mode</div>
             <select
-              value={usage}
-              onChange={(e) => setUsage(e.target.value as any)}
+              value={assignmentMode}
+              onChange={(e) => setAssignmentMode(e.target.value as any)}
               className="mt-1 rounded-md border px-3 py-2 text-sm w-full"
             >
-              <option value="CLIENT">Kliencka</option>
-              <option value="GEMINI">Urządzenia Gemini</option>
+              <option value="DHCP">DHCP</option>
+              <option value="PPPOE">PPPOE</option>
+              <option value="STATIC">STATIC</option>
             </select>
+            <div className="text-xs text-muted-foreground mt-1">
+              Docelowo provisioning bierze to jako źródło prawdy.
+            </div>
           </div>
 
           <div>
@@ -425,6 +468,7 @@ export default function IpNetworksPage() {
             <div className="text-xs text-muted-foreground">DNS 1</div>
             <input value={dns1} onChange={(e) => setDns1(e.target.value)} className="mt-1 rounded-md border px-3 py-2 text-sm w-full" />
           </div>
+
           <div>
             <div className="text-xs text-muted-foreground">DNS 2</div>
             <input value={dns2} onChange={(e) => setDns2(e.target.value)} className="mt-1 rounded-md border px-3 py-2 text-sm w-full" />

@@ -2,9 +2,16 @@
 
 // UI-only: Magazyn IP (mini-IPAM) – mock store bez backendu.
 // Zasada: jedna sieć (CIDR) generuje pojedyncze adresy IP (usable) z dziedziczeniem gateway/DNS.
+//
+// KANON (operatorski):
+// Sieć (Network) ma:
+// - poolKind: CUSTOMER_NAT / CUSTOMER_PUBLIC / INFRA
+// - assignmentMode: DHCP / PPPOE / STATIC
+//
+// Adresy dziedziczą gateway/DNS z sieci, a provisioning w przyszłości bierze assignmentMode z sieci jako źródło prawdy.
 
-export type IpNetworkType = "PUBLIC" | "PRIVATE"; // PUBLIC = routowalne, PRIVATE = NAT/management
-export type IpNetworkUsage = "CLIENT" | "GEMINI"; // CLIENT = kliencka, GEMINI = infrastruktura
+export type IpPoolKind = "CUSTOMER_NAT" | "CUSTOMER_PUBLIC" | "INFRA";
+export type IpAssignmentMode = "DHCP" | "PPPOE" | "STATIC";
 
 export type IpAddressMode = "DHCP" | "PPPOE" | "STATIC";
 export type IpAddressStatus = "FREE" | "ASSIGNED" | "RESERVED";
@@ -12,8 +19,8 @@ export type IpAddressStatus = "FREE" | "ASSIGNED" | "RESERVED";
 export type IpNetwork = {
   id: string;
   cidr: string; // np. 192.0.2.0/29
-  type: IpNetworkType;
-  usage: IpNetworkUsage;
+  poolKind: IpPoolKind;
+  assignmentMode: IpAssignmentMode;
   description: string;
   gateway: string;
   dns1: string;
@@ -35,6 +42,8 @@ export type IpAddress = {
   dns2: string;
 
   // przypisanie (UI-only)
+  // Uwaga: w kanonie tryb provisioning wynika z network.assignmentMode,
+  // ale dla UI zostawiamy `mode` (czasem przydaje się w mocku).
   mode?: IpAddressMode;
   customerName?: string;
   assignedAtIso?: string;
@@ -88,7 +97,11 @@ function nowIso() {
   return new Date().toISOString();
 }
 
-function pushHistory(prev: IpamState, addrId: string, ev: Omit<IpAddressHistoryEvent, "id" | "addrId" | "atIso" | "actor"> & { actor?: string; atIso?: string }) {
+function pushHistory(
+  prev: IpamState,
+  addrId: string,
+  ev: Omit<IpAddressHistoryEvent, "id" | "addrId" | "atIso" | "actor"> & { actor?: string; atIso?: string }
+) {
   const list = prev.addressHistory[addrId] ? [...prev.addressHistory[addrId]] : [];
   const full: IpAddressHistoryEvent = {
     id: uid("iphe"),
@@ -203,8 +216,8 @@ function seedState(): IpamState {
   const n1: IpNetwork = {
     id: uid("net"),
     cidr: "192.0.2.0/29",
-    type: "PUBLIC",
-    usage: "CLIENT",
+    poolKind: "CUSTOMER_PUBLIC",
+    assignmentMode: "PPPOE",
     description: "Public IP (klienci) – demo",
     gateway: "192.0.2.1",
     dns1: "1.1.1.1",
@@ -216,9 +229,9 @@ function seedState(): IpamState {
   const n2: IpNetwork = {
     id: uid("net"),
     cidr: "10.10.0.0/24",
-    type: "PRIVATE",
-    usage: "GEMINI",
-    description: "Management (Gemini) – demo",
+    poolKind: "INFRA",
+    assignmentMode: "STATIC",
+    description: "Management (infra) – demo",
     gateway: "10.10.0.1",
     dns1: "10.10.0.1",
     dns2: "1.1.1.1",
@@ -246,6 +259,7 @@ function seedState(): IpamState {
       ...a1[0],
       description: "IP do Internet PRO",
       status: "ASSIGNED",
+      // UI-only: zostawiamy mode jako hint (docelowo effective = n1.assignmentMode)
       mode: "PPPOE",
       customerName: "Jan Kowalski",
       assignedAtIso: now,
@@ -298,8 +312,8 @@ export function subscribeIpam(listener: Listener) {
 
 export function createNetwork(input: {
   cidr: string;
-  type: IpNetworkType;
-  usage: IpNetworkUsage;
+  poolKind: IpPoolKind;
+  assignmentMode: IpAssignmentMode;
   description: string;
   gateway: string;
   dns1: string;
@@ -310,8 +324,8 @@ export function createNetwork(input: {
   const network: IpNetwork = {
     id: uid("net"),
     cidr: input.cidr.trim(),
-    type: input.type,
-    usage: input.usage,
+    poolKind: input.poolKind,
+    assignmentMode: input.assignmentMode,
     description: input.description.trim(),
     gateway: input.gateway.trim(),
     dns1: input.dns1.trim(),
@@ -375,8 +389,8 @@ export function splitNetwork(networkId: string, childPrefix: number) {
       const network: IpNetwork = {
         id: uid("net"),
         cidr,
-        type: parent.type,
-        usage: parent.usage,
+        poolKind: parent.poolKind,
+        assignmentMode: parent.assignmentMode,
         description: parent.description,
         gateway: parent.gateway,
         dns1: parent.dns1,
@@ -401,14 +415,8 @@ export function splitNetwork(networkId: string, childPrefix: number) {
 
     return {
       ...prev,
-      networks: [
-        ...prev.networks.filter((n) => n.id !== networkId),
-        ...created.map((c) => c.network),
-      ],
-      addresses: [
-        ...prev.addresses.filter((a) => a.networkId !== networkId),
-        ...created.flatMap((c) => c.addresses),
-      ],
+      networks: [...prev.networks.filter((n) => n.id !== networkId), ...created.map((c) => c.network)],
+      addresses: [...prev.addresses.filter((a) => a.networkId !== networkId), ...created.flatMap((c) => c.addresses)],
     };
   });
 }
@@ -458,8 +466,7 @@ export function assignAddress(
           .replace(/[^a-z0-9\-]/g, "")
           .slice(0, 20)}-${base.ip.split(".").pop()}`;
 
-        const fallbackPass =
-          Math.random().toString(36).slice(2, 10) + "-" + Math.random().toString(36).slice(2, 10);
+        const fallbackPass = Math.random().toString(36).slice(2, 10) + "-" + Math.random().toString(36).slice(2, 10);
 
         return {
           ...base,
@@ -476,24 +483,28 @@ export function assignAddress(
     const addressHistory = pushHistory(prev, addrId, {
       action: "ASSIGN",
       note: `mode=${after?.mode ?? ""}`,
-      before: before ? {
-        status: before.status,
-        mode: before.mode,
-        customerName: before.customerName,
-        description: before.description,
-        mac: before.mac,
-        pppoeLogin: before.pppoeLogin,
-        expiresAtIso: before.expiresAtIso,
-      } : undefined,
-      after: after ? {
-        status: after.status,
-        mode: after.mode,
-        customerName: after.customerName,
-        description: after.description,
-        mac: after.mac,
-        pppoeLogin: after.pppoeLogin,
-        expiresAtIso: after.expiresAtIso,
-      } : undefined,
+      before: before
+        ? {
+            status: before.status,
+            mode: before.mode,
+            customerName: before.customerName,
+            description: before.description,
+            mac: before.mac,
+            pppoeLogin: before.pppoeLogin,
+            expiresAtIso: before.expiresAtIso,
+          }
+        : undefined,
+      after: after
+        ? {
+            status: after.status,
+            mode: after.mode,
+            customerName: after.customerName,
+            description: after.description,
+            mac: after.mac,
+            pppoeLogin: after.pppoeLogin,
+            expiresAtIso: after.expiresAtIso,
+          }
+        : undefined,
     });
     return { ...prev, addresses, addressHistory };
   });
