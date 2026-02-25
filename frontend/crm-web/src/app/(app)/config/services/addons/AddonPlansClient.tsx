@@ -1,7 +1,8 @@
 "use client";
 
 import Link from "next/link";
-import { useMemo, useState } from "react";
+import { useRouter, useSearchParams } from "next/navigation";
+import { useEffect, useMemo, useRef, useState } from "react";
 
 import { SimpleModal } from "@/components/SimpleModal";
 import { EffectiveAtModal, EffectiveAtDecision } from "@/components/services/EffectiveAtModal";
@@ -13,46 +14,39 @@ function uid(prefix: string) {
   return `${prefix}-${Math.random().toString(16).slice(2, 10)}`;
 }
 
-function formatIp(p: ServicePlan): string {
-  const pol = p.ipPolicy ?? "NONE";
-  if (pol === "NONE") return "—";
-  const qty = Math.max(1, Math.floor(p.ipCount ?? 1));
-  if (pol === "NAT_PRIVATE") return `NAT ×${qty}`;
-  return `PUBLIC ×${qty}`;
-}
-
-function formatBps(bps?: number): string {
-  if (bps == null || !Number.isFinite(bps) || bps <= 0) return "—";
-  const gbps = bps / 1_000_000_000;
-  if (gbps >= 1) return `${gbps.toFixed(gbps % 1 === 0 ? 0 : 2)} Gbps`;
-  const mbps = bps / 1_000_000;
-  return `${mbps.toFixed(mbps % 1 === 0 ? 0 : 1)} Mbps`;
-}
-
-function formatSpeed(p: ServicePlan): string {
-  const dl = formatBps(p.downloadBps);
-  const ul = formatBps(p.uploadBps);
-  if (dl === "—" && ul === "—") return "—";
-  return `${dl} / ${ul}`;
-}
-
-export default function PrimaryPlansPage() {
+export default function AddonPlansClient() {
   const [families] = useState<ServiceFamily[]>(seedFamilies());
   const [terms] = useState<ServiceTerm[]>(seedTerms());
   const [plans, setPlans] = useState<ServicePlan[]>(seedPlans());
 
+  const router = useRouter();
+  const searchParams = useSearchParams();
+  const autoOpenedRef = useRef(false);
+
   const [filterStatus, setFilterStatus] = useState<"all" | "active" | "archived">("active");
   const [q, setQ] = useState<string>("");
 
+  const addons = useMemo(() => plans.filter((p) => p.type === "addon"), [plans]);
   const primary = useMemo(() => plans.filter((p) => p.type === "primary"), [plans]);
+
+  // Addony wymagane przez aktywne primary (z subskrybentami) blokujemy przed archiwizacją.
+  const lockedAddonIds = useMemo(() => {
+    const locked = new Set<string>();
+    for (const p of primary) {
+      if (p.status !== "active") continue;
+      if ((p.subscribersCount ?? 0) <= 0) continue;
+      for (const a of p.requiredAddonPlanIds ?? []) locked.add(a);
+    }
+    return locked;
+  }, [primary]);
 
   const view = useMemo(() => {
     const needle = q.trim().toLowerCase();
-    return primary
+    return addons
       .filter((p) => (filterStatus === "all" ? true : p.status === filterStatus))
       .filter((p) => (needle ? (p.name + " " + p.billingProductCode).toLowerCase().includes(needle) : true))
       .sort((a, b) => a.name.localeCompare(b.name));
-  }, [primary, filterStatus, q]);
+  }, [addons, filterStatus, q]);
 
   const famById = useMemo(() => new Map(families.map((f) => [f.id, f.name])), [families]);
   const termById = useMemo(() => new Map(terms.map((t) => [t.id, t.name])), [terms]);
@@ -70,12 +64,30 @@ export default function PrimaryPlansPage() {
   const [detailsOpen, setDetailsOpen] = useState(false);
   const [detailsPlan, setDetailsPlan] = useState<ServicePlan | null>(null);
 
+  useEffect(() => {
+    const editId = searchParams.get("edit");
+    if (!editId) return;
+    if (autoOpenedRef.current) return;
+
+    const found = plans.find((p) => p.id === editId && p.type === "addon");
+    if (!found) return;
+
+    autoOpenedRef.current = true;
+    setEditing(found);
+    setEditorMode("edit");
+    setEditorOpen(true);
+
+    router.replace("/config/services/addons");
+  }, [searchParams, plans, router]);
+
+
   function applyBulk(action: "archive" | "restore", decision: EffectiveAtDecision) {
     const ids = new Set(selectedIds);
     setPlans((prev) =>
       prev.map((p) => {
-        if (p.type !== "primary") return p;
+        if (p.type !== "addon") return p;
         if (!ids.has(p.id)) return p;
+        if (action === "archive" && lockedAddonIds.has(p.id)) return p; // hard guard
         const nextStatus = action === "archive" ? "archived" : "active";
         const effectiveFrom = decision.mode === "now" ? new Date().toISOString().slice(0, 10) : decision.effectiveAtIso;
         return { ...p, status: nextStatus, effectiveFrom };
@@ -88,9 +100,10 @@ export default function PrimaryPlansPage() {
     <div className="p-6 space-y-4">
       <div className="flex items-start justify-between gap-3">
         <div>
-          <div className="text-sm font-semibold">Konfiguracja → Usługi → Usługi główne</div>
+          <div className="text-sm font-semibold">Konfiguracja → Usługi → Usługi dodatkowe</div>
           <div className="text-xs text-muted-foreground">
-            Definicja planów primary: ceny miesięczne, opłata aktywacyjna, okno sprzedaży, podwyżki i zależności addonów.
+            Addony są zawsze bezterminowe w sprzedaży (operacyjnie). Archiwizacja blokuje sprzedaż nowym, nie usuwa
+            subskrybentów.
           </div>
         </div>
         <Link className="text-sm underline" href="/config/services">
@@ -104,7 +117,7 @@ export default function PrimaryPlansPage() {
           <input
             value={q}
             onChange={(e) => setQ(e.target.value)}
-            placeholder="np. INTERNET_300"
+            placeholder="np. ONT_RENT"
             className="mt-1 rounded-md border px-3 py-2 text-sm w-72"
           />
         </div>
@@ -127,10 +140,10 @@ export default function PrimaryPlansPage() {
             setEditorMode("new");
             setEditing({
               id: "",
-              type: "primary",
+              type: "addon",
               name: "",
               familyId: families[0]?.id ?? "",
-              termId: terms[0]?.id ?? "",
+              termId: terms.find((t) => t.termMonths === null)?.id ?? terms[0]?.id ?? "",
               billingProductCode: "",
               status: "active",
               subscribersCount: 0,
@@ -146,16 +159,13 @@ export default function PrimaryPlansPage() {
               isCyclic: false,
               requiredAddonPlanIds: [],
               optionalAddonPlanIds: [],
-
-              ipPolicy: "NONE",
-              ipCount: 0,
-              downloadBps: undefined,
-              uploadBps: undefined,
+              requiresDevice: false,
+              allowedDeviceCategories: [],
             });
             setEditorOpen(true);
           }}
         >
-          + Dodaj usługę główną
+          + Dodaj usługę dodatkową
         </button>
 
         {selectedIds.length > 0 && (
@@ -186,8 +196,8 @@ export default function PrimaryPlansPage() {
         )}
       </div>
 
-      <div className="rounded-xl border overflow-x-auto">
-        <table className="w-full text-sm min-w-[1100px] lg:min-w-0">
+      <div className="rounded-xl border overflow-hidden">
+        <table className="w-full text-sm">
           <thead className="bg-muted/40">
             <tr>
               <th className="p-3 w-10"></th>
@@ -197,75 +207,75 @@ export default function PrimaryPlansPage() {
               <th className="p-3 text-left">Billing code</th>
               <th className="p-3 text-left">Status</th>
               <th className="p-3 text-right">Subskrybenci</th>
-              <th className="p-3 text-left">IP</th>
-              <th className="p-3 text-left">Prędkość (DL/UL)</th>
               <th className="p-3 text-right">M1 (zł)</th>
-              <th className="p-3 text-right">Aktywacja (zł)</th>
               <th className="p-3 text-left">Sprzedaż (od–do)</th>
               <th className="p-3 text-left">Obowiązuje od</th>
               <th className="p-3 text-right">Akcje</th>
             </tr>
           </thead>
           <tbody>
-            {view.map((p) => (
-              <tr key={p.id} className="border-t">
-                <td className="p-3">
-                  <input
-                    type="checkbox"
-                    checked={!!selected[p.id]}
-                    onChange={(e) => setSelected((prev) => ({ ...prev, [p.id]: e.target.checked }))}
-                  />
-                </td>
-                <td className="p-3">
-                  <div className="font-medium">{p.name}</div>
-                  <div className="text-xs text-muted-foreground">{p.id}</div>
-                </td>
-                <td className="p-3">{famById.get(p.familyId) || "—"}</td>
-                <td className="p-3">{termById.get(p.termId) || "—"}</td>
-                <td className="p-3 font-mono text-xs">{p.billingProductCode}</td>
-                <td className="p-3">{formatStatus(p.status)}</td>
-                <td className="p-3 text-right tabular-nums">{p.subscribersCount}</td>
-                <td className="p-3">
-                  <div className="text-xs font-medium">{formatIp(p)}</div>
-                </td>
-                <td className="p-3">
-                  <div className="text-xs font-medium tabular-nums">{formatSpeed(p)}</div>
-                </td>
-                <td className="p-3 text-right tabular-nums">{(p.monthPrices?.[0] ?? 0).toFixed(2)}</td>
-                <td className="p-3 text-right tabular-nums">{(p.activationFee ?? 0).toFixed(2)}</td>
-                <td className="p-3">
-                  <div className="tabular-nums">{p.saleFrom}</div>
-                  <div className="tabular-nums text-xs text-muted-foreground">{p.saleTo ?? "—"}</div>
-                </td>
-                <td className="p-3">{p.effectiveFrom}</td>
-                <td className="p-3 text-right">
-                  <div className="inline-flex items-center justify-end gap-2">
-                    <button
-                      className="px-3 py-1.5 rounded-md border"
-                      onClick={() => {
-                        setDetailsPlan(p);
-                        setDetailsOpen(true);
-                      }}
-                    >
-                      Szczegóły
-                    </button>
-                    <button
-                      className="px-3 py-1.5 rounded-md border"
-                      onClick={() => {
-                        setEditorMode("edit");
-                        setEditing(p);
-                        setEditorOpen(true);
-                      }}
-                    >
-                      Edytuj
-                    </button>
-                  </div>
-                </td>
-              </tr>
-            ))}
+            {view.map((p) => {
+              const locked = lockedAddonIds.has(p.id);
+              return (
+                <tr key={p.id} className="border-t">
+                  <td className="p-3">
+                    <input
+                      type="checkbox"
+                      checked={!!selected[p.id]}
+                      disabled={locked && p.status === "active"}
+                      title={locked ? "Addon wymagany przez aktywną usługę główną — nie można archiwizować" : ""}
+                      onChange={(e) => setSelected((prev) => ({ ...prev, [p.id]: e.target.checked }))}
+                    />
+                  </td>
+                  <td className="p-3">
+                    <div className="font-medium flex items-center gap-2">
+                      {p.name}
+                      {locked && p.status === "active" && (
+                        <span className="text-[11px] px-2 py-0.5 rounded-full border bg-muted">Wymagany</span>
+                      )}
+                    </div>
+                    <div className="text-xs text-muted-foreground">{p.id}</div>
+                  </td>
+                  <td className="p-3">{famById.get(p.familyId) || "—"}</td>
+                  <td className="p-3">{termById.get(p.termId) || "—"}</td>
+                  <td className="p-3 font-mono text-xs">{p.billingProductCode}</td>
+                  <td className="p-3">{formatStatus(p.status)}</td>
+                  <td className="p-3 text-right tabular-nums">{p.subscribersCount}</td>
+                  <td className="p-3 text-right tabular-nums">{(p.monthPrices?.[0] ?? 0).toFixed(2)}</td>
+                  <td className="p-3">
+                    <div className="tabular-nums">{p.saleFrom}</div>
+                    <div className="tabular-nums text-xs text-muted-foreground">{p.saleTo ?? "—"}</div>
+                  </td>
+                  <td className="p-3">{p.effectiveFrom}</td>
+                  <td className="p-3 text-right">
+                    <div className="inline-flex items-center justify-end gap-2">
+                      <button
+                        className="px-3 py-1.5 rounded-md border"
+                        onClick={() => {
+                          setDetailsPlan(p);
+                          setDetailsOpen(true);
+                        }}
+                      >
+                        Szczegóły
+                      </button>
+                      <button
+                        className="px-3 py-1.5 rounded-md border"
+                        onClick={() => {
+                          setEditorMode("edit");
+                          setEditing(p);
+                          setEditorOpen(true);
+                        }}
+                      >
+                        Edytuj
+                      </button>
+                    </div>
+                  </td>
+                </tr>
+              );
+            })}
             {view.length === 0 && (
               <tr>
-                <td colSpan={14} className="p-6 text-center text-muted-foreground">
+                <td colSpan={11} className="p-6 text-center text-muted-foreground">
                   Brak wyników
                 </td>
               </tr>
@@ -344,6 +354,19 @@ export default function PrimaryPlansPage() {
                 <div className="tabular-nums">{detailsPlan.saleTo ?? "—"}</div>
               </div>
             </div>
+
+            {detailsPlan.requiredAddonPlanIds && detailsPlan.requiredAddonPlanIds.length > 0 ? (
+              <div>
+                <div className="text-xs text-muted-foreground">Wymagane addony</div>
+                <div className="mt-1 flex flex-wrap gap-2">
+                  {detailsPlan.requiredAddonPlanIds.map((id) => (
+                    <span key={id} className="text-xs px-2 py-1 rounded-full border bg-muted">
+                      {id}
+                    </span>
+                  ))}
+                </div>
+              </div>
+            ) : null}
           </div>
         ) : null}
       </SimpleModal>
@@ -364,7 +387,7 @@ export default function PrimaryPlansPage() {
               ...prev,
               {
                 id: uid("plan"),
-                type: "primary",
+                type: "addon",
                 status: "active",
                 subscribersCount: 0,
                 effectiveFrom,
@@ -382,11 +405,7 @@ export default function PrimaryPlansPage() {
 
       <EffectiveAtModal
         open={effectiveOpen}
-        title={
-          bulkAction === "archive"
-            ? "Archiwizacja usług głównych (grupowo)"
-            : "Przywracanie usług głównych (grupowo)"
-        }
+        title={bulkAction === "archive" ? "Archiwizacja addonów (grupowo)" : "Przywracanie addonów (grupowo)"}
         description="Wybierz kiedy zmiana ma obowiązywać."
         confirmLabel={bulkAction === "archive" ? "Zaplanuj archiwizację" : "Zaplanuj przywrócenie"}
         onClose={() => setEffectiveOpen(false)}

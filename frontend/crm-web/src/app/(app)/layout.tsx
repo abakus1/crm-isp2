@@ -21,7 +21,7 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
       <div className="flex-1 min-h-screen flex flex-col">
         <Header />
         <main className="flex-1 p-6">
-          <div className="max-w-6xl">{children}</div>
+          <div className="w-full">{children}</div>
         </main>
         <Footer />
       </div>

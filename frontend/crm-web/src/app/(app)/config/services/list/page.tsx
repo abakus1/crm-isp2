@@ -78,6 +78,9 @@ export default function ServicesListPage() {
     setDeleteId(null);
   }
 
+  const [detailsOpen, setDetailsOpen] = useState(false);
+  const [detailsRow, setDetailsRow] = useState<any>(null);
+
   const [decisionOpen, setDecisionOpen] = useState(false);
   const [decisionCtx, setDecisionCtx] = useState<{
     kind: "archive" | "restore";
@@ -232,6 +235,15 @@ export default function ServicesListPage() {
 
             <div className="col-span-1 text-right">
               <div className="inline-flex items-center justify-end gap-2">
+                <button
+                  className="px-3 py-2 rounded-md border bg-background hover:bg-muted text-sm"
+                  onClick={() => {
+                    setDetailsRow(r);
+                    setDetailsOpen(true);
+                  }}
+                >
+                  Szczegóły
+                </button>
                 <Link
                   href={
                     r.type === "primary"
@@ -273,6 +285,72 @@ export default function ServicesListPage() {
           </div>
         ))}
       </div>
+
+      <SimpleModal
+        open={detailsOpen}
+        title="Szczegóły usługi"
+        description={detailsRow ? `${detailsRow.name} • ${detailsRow.type}` : undefined}
+        onClose={() => setDetailsOpen(false)}
+        footer={
+          <div className="flex items-center justify-end gap-2">
+            <button className="px-3 py-2 rounded-md border" onClick={() => setDetailsOpen(false)}>
+              Zamknij
+            </button>
+            {detailsRow ? (
+              <Link
+                href={
+                  detailsRow.type === "primary"
+                    ? `/config/services/primary?edit=${encodeURIComponent(detailsRow.id)}`
+                    : `/config/services/addons?edit=${encodeURIComponent(detailsRow.id)}`
+                }
+                className="px-3 py-2 rounded-md bg-primary text-primary-foreground text-sm"
+                onClick={() => setDetailsOpen(false)}
+              >
+                Edytuj
+              </Link>
+            ) : null}
+          </div>
+        }
+      >
+        {detailsRow ? (
+          <div className="space-y-3 text-sm">
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <div className="text-xs text-muted-foreground">ID</div>
+                <div className="font-mono text-xs">{detailsRow.id}</div>
+              </div>
+              <div>
+                <div className="text-xs text-muted-foreground">Billing code</div>
+                <div className="font-mono text-xs">{detailsRow.billingProductCode}</div>
+              </div>
+              <div>
+                <div className="text-xs text-muted-foreground">Kategoria</div>
+                <div>{detailsRow.familyName}</div>
+              </div>
+              <div>
+                <div className="text-xs text-muted-foreground">Okres</div>
+                <div>{detailsRow.termName}</div>
+              </div>
+              <div>
+                <div className="text-xs text-muted-foreground">Status</div>
+                <div>{formatStatus(detailsRow.status)}</div>
+              </div>
+              <div>
+                <div className="text-xs text-muted-foreground">Subskrybenci</div>
+                <div className="tabular-nums">{detailsRow.subscribersCount}</div>
+              </div>
+              <div>
+                <div className="text-xs text-muted-foreground">M1 (PLN)</div>
+                <div className="tabular-nums">{detailsRow.month1Price}</div>
+              </div>
+              <div>
+                <div className="text-xs text-muted-foreground">Aktywacja (PLN)</div>
+                <div className="tabular-nums">{detailsRow.activationFee}</div>
+              </div>
+            </div>
+          </div>
+        ) : null}
+      </SimpleModal>
 
       <EffectiveAtModal
       open={decisionOpen}
