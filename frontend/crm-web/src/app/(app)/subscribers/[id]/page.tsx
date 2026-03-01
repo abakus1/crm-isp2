@@ -1,6 +1,7 @@
 "use client";
 
 import Link from "next/link";
+import { useParams } from "next/navigation";
 import { useMemo, useState } from "react";
 
 import { formatKind, formatStatus, seedSubscribers, type SubscriberRecord } from "@/lib/mockSubscribers";
@@ -172,8 +173,29 @@ function PlaceholderList({ title, items, hint }: { title: string; items: string[
 }
 
 export default function SubscriberDetailsPage({ params }: { params: { id: string } }) {
+  // Next.js App Router: w Client Components parametry routingu są najpewniej dostępne przez useParams().
+  // (Prop `params` bywa niepoprawny/undefined w zależności od wersji i trybu buildu).
+  // Dlatego traktujemy `params` jako fallback, ale źródłem prawdy jest useParams().
+  const routeParams = useParams<{ id?: string | string[] }>();
+
+  const rawId = useMemo(() => {
+    const fromHook = routeParams?.id;
+    if (typeof fromHook === "string") return fromHook;
+    if (Array.isArray(fromHook) && fromHook.length > 0) return fromHook[0] ?? "";
+    return params?.id ?? "";
+  }, [routeParams, params?.id]);
+
+  const id = useMemo(() => {
+    // Segment URL zwykle już jest "decoded", ale wolimy być odporni na encodeURIComponent().
+    try {
+      return decodeURIComponent(rawId);
+    } catch {
+      return rawId;
+    }
+  }, [rawId]);
+
   const all = useMemo(() => seedSubscribers(), []);
-  const s = useMemo(() => all.find((x) => x.id === params.id) ?? null, [all, params.id]);
+  const s = useMemo(() => all.find((x) => x.id === id) ?? null, [all, id]);
   const [tab, setTab] = useState<TabKey>("dane");
 
   if (!s) {
