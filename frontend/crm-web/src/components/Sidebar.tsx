@@ -51,9 +51,12 @@ export function Sidebar() {
         items: [{ label: "Lista (placeholder)", href: "/services" }],
       },
       {
-        label: "Klienci",
-        key: "clients",
-        items: [{ label: "Lista (placeholder)", href: "/clients", requireAny: ["subscribers.read"] }],
+        label: "Abonenci",
+        key: "subscribers",
+        items: [
+          { label: "Lista abonentów", href: "/subscribers", requireAny: ["subscribers.read"] },
+          { label: "Dodaj abonenta", href: "/subscribers/new", requireAny: ["subscribers.create"] },
+        ],
       },
       {
         label: "OLT",
@@ -73,11 +76,6 @@ export function Sidebar() {
             label: "Usługi",
             href: "/config/services",
             // permissions dopniemy później (ślepe UI)
-          },
-          {
-            label: "Magazyn urządzeń",
-            href: "/config/inventory",
-            // UI-only: backend (audit/historia/operator) dojdzie później
           },
           {
             label: "Magazyn IP",
@@ -132,7 +130,7 @@ export function Sidebar() {
     if (pathname.startsWith("/staff")) return "staff";
     if (pathname.startsWith("/contracts")) return "contracts";
     if (pathname.startsWith("/services")) return "services";
-    if (pathname.startsWith("/clients")) return "clients";
+    if (pathname.startsWith("/subscribers")) return "subscribers";
     if (pathname.startsWith("/olt")) return "olt";
     if (pathname.startsWith("/networks")) return "networks";
     if (pathname.startsWith("/config") || pathname.startsWith("/permissions") || pathname.startsWith("/settings")) return "config";
@@ -143,7 +141,7 @@ export function Sidebar() {
     staff: autoOpenKey === "staff",
     contracts: autoOpenKey === "contracts",
     services: autoOpenKey === "services",
-    clients: autoOpenKey === "clients",
+    subscribers: autoOpenKey === "subscribers",
     olt: autoOpenKey === "olt",
     networks: autoOpenKey === "networks",
     config: autoOpenKey === "config",
