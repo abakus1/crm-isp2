@@ -1,6 +1,15 @@
 export type SubscriberKind = "person" | "jdg" | "spolka_os" | "spolka_praw" | "jednostka";
 
-export type SubscriberStatus = "interested" | "order" | "inactive" | "active" | "suspended" | "blocked" | "to_terminate" | "collection" | "archived";
+export type SubscriberStatus =
+  | "interested"
+  | "order"
+  | "inactive"
+  | "active"
+  | "suspended"
+  | "blocked"
+  | "to_terminate"
+  | "collection"
+  | "archived";
 
 export type ConsentState = {
   rodo_processing: boolean;
@@ -17,13 +26,7 @@ export type ConsentState = {
 };
 
 export type SubscriberAddress = {
-  label:
-    | "siedziba_firmy"
-    | "zameldowania"
-    | "zamieszkania"
-    | "korespondencyjny"
-    | "fakturowy"
-    | "platnika";
+  label: "siedziba_firmy" | "zameldowania" | "zamieszkania" | "korespondencyjny" | "fakturowy" | "platnika";
   country: string;
   city: string;
   postal_code: string;
@@ -38,12 +41,25 @@ export type SubscriberRecord = {
   kind: SubscriberKind;
   status: SubscriberStatus;
   display_name: string;
+
+  citizenship?: string;
+  first_name?: string;
+  last_name?: string;
+  company_name?: string;
+  ceidg?: string;
+
   email?: string;
   phone?: string;
   pesel?: string;
   nip?: string;
   krs?: string;
   regon?: string;
+
+  id_card_no?: string;
+  passport_no?: string;
+  eu_doc_no?: string;
+  kyc_doc_ref?: string;
+
   created_at: string;
   notes?: string;
   consents: ConsentState;
@@ -113,9 +129,14 @@ export function seedSubscribers(): SubscriberRecord[] {
       kind: "person",
       status: "active",
       display_name: "Jan Kowalski",
+      citizenship: "Polak",
+      first_name: "Jan",
+      last_name: "Kowalski",
       email: "jan.kowalski@example.com",
       phone: "+48 600 100 200",
       pesel: "80010112345",
+      id_card_no: "ABC123456",
+      kyc_doc_ref: "KYC-0001 (placeholder)",
       created_at: "2026-02-20",
       consents: baseConsents,
       addresses: [
@@ -144,10 +165,17 @@ export function seedSubscribers(): SubscriberRecord[] {
       kind: "jdg",
       status: "order",
       display_name: "Studio Pixel (A. Nowak)",
+      citizenship: "Polak",
+      first_name: "Anna",
+      last_name: "Nowak",
+      company_name: "Studio Pixel",
+      ceidg: "CEIDG-123456 (placeholder)",
       email: "kontakt@studiopixel.pl",
       phone: "+48 600 555 111",
       nip: "6761234567",
       regon: "123456789",
+      id_card_no: "DEF654321",
+      kyc_doc_ref: "KYC-0002 (placeholder)",
       created_at: "2026-02-26",
       notes: "Wymaga NAT + 2 adresy publiczne dla usług dodatkowych (placeholder).",
       consents: { ...baseConsents, marketing: true },
@@ -176,11 +204,14 @@ export function seedSubscribers(): SubscriberRecord[] {
       kind: "spolka_praw",
       status: "inactive",
       display_name: "Gemini Sample Sp. z o.o.",
+      citizenship: "PL",
+      company_name: "Gemini Sample Sp. z o.o.",
       email: "biuro@gemini-sample.pl",
       phone: "+48 600 999 000",
       nip: "9450000000",
       krs: "0000123456",
       regon: "987654321",
+      kyc_doc_ref: "KYC-0003 (placeholder)",
       created_at: "2025-12-01",
       consents: baseConsents,
       addresses: [

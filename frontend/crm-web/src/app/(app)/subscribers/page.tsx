@@ -1,6 +1,7 @@
 "use client";
 
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { useMemo, useState } from "react";
 
 import { formatKind, formatStatus, seedSubscribers, type SubscriberRecord } from "@/lib/mockSubscribers";
@@ -9,32 +10,52 @@ function Badge({ children }: { children: React.ReactNode }) {
   return <span className="inline-flex items-center rounded-md border px-2 py-0.5 text-xs bg-muted/20">{children}</span>;
 }
 
-function Row({ s }: { s: SubscriberRecord }) {
+function Row({ s, onOpen }: { s: SubscriberRecord; onOpen: (id: string) => void }) {
+  const href = `/subscribers/${encodeURIComponent(s.id)}`;
+
   return (
-    <tr className="border-b last:border-b-0">
+    <tr
+      className="border-b last:border-b-0 cursor-pointer hover:bg-muted/20"
+      role="button"
+      tabIndex={0}
+      onClick={() => onOpen(s.id)}
+      onKeyDown={(e) => {
+        if (e.key === "Enter" || e.key === " ") {
+          e.preventDefault();
+          onOpen(s.id);
+        }
+      }}
+      aria-label={`Otwórz abonenta: ${s.display_name}`}
+    >
       <td className="py-3 pr-3">
         <div className="text-sm font-medium">
-          <Link className="hover:underline" href={`/subscribers/${encodeURIComponent(s.id)}`}>
+          <Link className="hover:underline" href={href} onClick={(e) => e.stopPropagation()}>
             {s.display_name}
           </Link>
         </div>
         <div className="text-xs text-muted-foreground">ID: {s.id}</div>
       </td>
+
       <td className="py-3 pr-3 text-sm">
         <Badge>{formatKind(s.kind)}</Badge>
       </td>
+
       <td className="py-3 pr-3 text-sm">
         <Badge>{formatStatus(s.status)}</Badge>
       </td>
+
       <td className="py-3 pr-3 text-sm">
         <div className="text-sm">{s.email ?? "—"}</div>
         <div className="text-xs text-muted-foreground">{s.phone ?? "—"}</div>
       </td>
+
       <td className="py-3 pr-3 text-sm">{s.created_at}</td>
+
       <td className="py-3 text-right">
         <Link
-          href={`/subscribers/${encodeURIComponent(s.id)}`}
+          href={href}
           className="inline-flex items-center justify-center rounded-md border px-3 py-1.5 text-sm hover:bg-muted/40"
+          onClick={(e) => e.stopPropagation()}
         >
           Otwórz
         </Link>
@@ -45,6 +66,8 @@ function Row({ s }: { s: SubscriberRecord }) {
 
 export default function SubscribersListPage() {
   const all = useMemo(() => seedSubscribers(), []);
+  const router = useRouter();
+
   const [q, setQ] = useState("");
   const [onlyActive, setOnlyActive] = useState(false);
 
@@ -64,14 +87,16 @@ export default function SubscribersListPage() {
       });
   }, [all, q, onlyActive]);
 
+  const openSubscriber = (id: string) => {
+    router.push(`/subscribers/${encodeURIComponent(id)}`);
+  };
+
   return (
     <div className="p-6 space-y-4">
       <div className="flex items-start justify-between gap-4">
         <div>
           <div className="text-sm font-semibold">Abonenci</div>
-          <div className="text-xs text-muted-foreground">
-            Ślepe UI: widok zgodny z Twoim excellem (karty + zakładki). Backend podepniemy później.
-          </div>
+          <div className="text-xs text-muted-foreground">Kliknij w wiersz, żeby otworzyć kartę abonenta.</div>
         </div>
 
         <Link
@@ -111,18 +136,9 @@ export default function SubscribersListPage() {
                 <th className="py-2 font-medium text-right">Akcje</th>
               </tr>
             </thead>
-            <tbody>{rows.map((s) => <Row key={s.id} s={s} />)}</tbody>
+            <tbody>{rows.map((s) => <Row key={s.id} s={s} onOpen={openSubscriber} />)}</tbody>
           </table>
         </div>
-      </div>
-
-      <div className="rounded-xl border p-4 bg-muted/20">
-        <div className="text-sm font-medium">Co tu jest “excelowe”?</div>
-        <ul className="list-disc ml-5 mt-2 text-sm text-muted-foreground space-y-1">
-          <li>Rodzaj abonenta steruje polami (osoba/JDG/spółki/jednostka).</li>
-          <li>Zakładki: Dane → Adresy → Umowy → Usługi → Urządzenia → Rozliczenia → GPON → AVIOS → Zgody → Historia.</li>
-          <li>To jest UI-only: dane są przykładowe, ale layout i flow mają zostać docelowo.</li>
-        </ul>
       </div>
     </div>
   );
