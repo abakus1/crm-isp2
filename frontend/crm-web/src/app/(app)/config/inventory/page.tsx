@@ -1,4 +1,4 @@
-"use client";
+"use client"
 
 import { useEffect, useMemo, useState, useSyncExternalStore } from "react";
 
@@ -461,11 +461,15 @@ function DeviceModal({
           ? `Stan urządzenia: ${device.model} (${device.serialNo})`
           : `Historia: ${device.model} (${device.serialNo})`;
 
+  // TS safety: mimo guardów powyżej, TypeScript nie zawsze utrzymuje zawężenie typu w callbackach.
+  // Bierzemy stabilne wartości z "device" tu, a w funkcjach używamy już tylko tych constów.
+  const deviceId = device.id;
+
   function saveEdit() {
     try {
       setErr(null);
       editDevice(
-        device.id,
+        deviceId,
         {
           kind,
           model: model.trim(),
@@ -483,7 +487,7 @@ function DeviceModal({
   function saveStatus() {
     try {
       setErr(null);
-      changeDeviceStatus(device.id, status, reason);
+      changeDeviceStatus(deviceId, status, reason);
       onClose();
     } catch (e: any) {
       setErr(e?.message ?? "Błąd zmiany statusu");
@@ -493,7 +497,7 @@ function DeviceModal({
   function saveCondition() {
     try {
       setErr(null);
-      changeDeviceCondition(device.id, cond, reason);
+      changeDeviceCondition(deviceId, cond, reason);
       onClose();
     } catch (e: any) {
       setErr(e?.message ?? "Błąd zmiany stanu");
