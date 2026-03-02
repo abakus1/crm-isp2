@@ -1,4 +1,13 @@
-export type SubscriberKind = "person" | "jdg" | "spolka_os" | "spolka_praw" | "jednostka";
+// UI-only taxonomy (can evolve independently from backend enums).
+// The goal is: show correct fields per legal form without breaking existing UI.
+export type SubscriberKind =
+  | "person"
+  | "jdg"
+  | "spolka_cywilna"
+  | "spolka_osobowa"
+  | "spolka_kapitalowa"
+  | "fundacja"
+  | "jednostka_budzetowa";
 
 export type SubscriberStatus =
   | "interested"
@@ -72,11 +81,15 @@ export function formatKind(k: SubscriberKind): string {
       return "Osoba fizyczna";
     case "jdg":
       return "JDG";
-    case "spolka_os":
+    case "spolka_cywilna":
+      return "Spółka cywilna";
+    case "spolka_osobowa":
       return "Spółka osobowa";
-    case "spolka_praw":
-      return "Spółka prawa";
-    case "jednostka":
+    case "spolka_kapitalowa":
+      return "Spółka kapitałowa";
+    case "fundacja":
+      return "Fundacja";
+    case "jednostka_budzetowa":
       return "Jednostka budżetowa";
     default:
       return k;
@@ -201,7 +214,7 @@ export function seedSubscribers(): SubscriberRecord[] {
     },
     {
       id: "sub_0003",
-      kind: "spolka_praw",
+      kind: "spolka_kapitalowa",
       status: "inactive",
       display_name: "Gemini Sample Sp. z o.o.",
       citizenship: "PL",

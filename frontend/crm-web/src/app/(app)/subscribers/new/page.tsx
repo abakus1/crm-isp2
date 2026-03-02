@@ -8,6 +8,8 @@ import { formatKind } from "@/lib/mockSubscribers";
 
 type Field = { key: string; label: string; placeholder?: string; helper?: string };
 
+type PersonDocType = "id_card" | "passport";
+
 function Section({ title, desc, children }: { title: string; desc?: string; children: React.ReactNode }) {
   return (
     <div className="rounded-xl border bg-card p-4">
@@ -33,7 +35,15 @@ function Input({ label, placeholder, helper }: { label: string; placeholder?: st
 }
 
 function SelectKind({ value, onChange }: { value: SubscriberKind; onChange: (v: SubscriberKind) => void }) {
-  const opts: SubscriberKind[] = ["person", "jdg", "spolka_os", "spolka_praw", "jednostka"];
+  const opts: SubscriberKind[] = [
+    "person",
+    "jdg",
+    "spolka_cywilna",
+    "spolka_osobowa",
+    "spolka_kapitalowa",
+    "fundacja",
+    "jednostka_budzetowa",
+  ];
   return (
     <label className="block">
       <div className="text-xs text-muted-foreground mb-1">Rodzaj abonenta</div>
@@ -58,6 +68,11 @@ function Grid({ children }: { children: React.ReactNode }) {
 
 export default function SubscriberNewPage() {
   const [kind, setKind] = useState<SubscriberKind>("person");
+  const [personDoc, setPersonDoc] = useState<PersonDocType>("id_card");
+
+  const isCompany = kind !== "person";
+  const showCeidg = kind === "jdg" || kind === "spolka_cywilna";
+  const showKrs = kind === "spolka_osobowa" || kind === "spolka_kapitalowa" || kind === "fundacja";
 
   const fields = useMemo(() => {
     const base: Field[] = [
@@ -69,26 +84,33 @@ export default function SubscriberNewPage() {
     const person: Field[] = [
       { key: "first_name", label: "Imię" },
       { key: "last_name", label: "Nazwisko" },
-      { key: "pesel", label: "PESEL" },
-      { key: "id_no", label: "Seria i numer dowodu" },
-      { key: "passport", label: "Seria paszportu/dowodu EU", helper: "użyj, jeśli nie ma dowodu PL" },
+      ...(personDoc === "id_card"
+        ? ([
+            { key: "pesel", label: "PESEL" },
+            { key: "id_no", label: "Seria i numer dowodu" },
+          ] as Field[])
+        : ([
+            { key: "passport_no", label: "Seria i numer paszportu / dokumentu EU" },
+            { key: "passport_country", label: "Kraj wydania" },
+          ] as Field[])),
       { key: "kyc_scan", label: "Skan dokumentu KYC", helper: "UI-only: docelowo upload + audyt" },
     ];
 
-    const company: Field[] = [
+
+    const companyCore: Field[] = [
       { key: "name", label: "Nazwa" },
       { key: "nip", label: "NIP" },
       { key: "regon", label: "REGON" },
-      { key: "krs", label: "KRS" },
-      { key: "ceidg", label: "CEIDG" },
+      ...(showKrs ? ([{ key: "krs", label: "KRS" }] as Field[]) : []),
+      ...(showCeidg ? ([{ key: "ceidg", label: "CEIDG" }] as Field[]) : []),
     ];
 
     if (kind === "person") return [...person, ...base];
-    if (kind === "jdg") return [{ key: "owner", label: "Imię i nazwisko właściciela" }, ...company, ...base];
-    if (kind === "spolka_os") return [...company, ...base];
-    if (kind === "spolka_praw") return [...company, ...base];
-    return [{ key: "unit_name", label: "Nazwa jednostki" }, ...company, ...base];
-  }, [kind]);
+    if (kind === "jdg") return [{ key: "owner", label: "Imię i nazwisko właściciela" }, ...companyCore, ...base];
+    if (kind === "spolka_cywilna") return [{ key: "partners", label: "Wspólnicy (opcjonalnie)" }, ...companyCore, ...base];
+    if (kind === "jednostka_budzetowa") return [{ key: "unit_name", label: "Nazwa jednostki" }, ...companyCore, ...base];
+    return [...companyCore, ...base];
+  }, [kind, personDoc, showCeidg, showKrs]);
 
   return (
     <div className="p-6 space-y-4">
@@ -114,9 +136,48 @@ export default function SubscriberNewPage() {
             <div className="text-sm mt-1">
               Wybrano: <span className="font-medium">{formatKind(kind)}</span>
             </div>
-            <div className="text-xs text-muted-foreground mt-1">Pola typu NIP/KRS/CEIDG pokażą się tylko tam, gdzie mają sens.</div>
+            <div className="text-xs text-muted-foreground mt-1">
+              {isCompany ? (
+                <>
+                  {showCeidg && !showKrs && "Ten typ pokazuje CEIDG (bez KRS)."}
+                  {showKrs && !showCeidg && "Ten typ pokazuje KRS (bez CEIDG)."}
+                  {!showKrs && !showCeidg && "Ten typ nie wymaga KRS ani CEIDG."}
+                </>
+              ) : (
+                <>Dla osoby fizycznej wybierasz typ dokumentu: dowód (PESEL + seria/numer) albo paszport (seria/numer + kraj wydania).</>
+              )}
+            </div>
           </div>
         </div>
+
+        {kind === "person" && (
+          <div className="mt-4 rounded-xl border bg-card p-4">
+            <div className="text-sm font-semibold">Dokument tożsamości</div>
+            <div className="text-xs text-muted-foreground mt-1">UI-only: to tylko steruje widocznością pól.</div>
+
+            <div className="mt-3 flex flex-col md:flex-row md:items-center gap-3">
+              <label className="inline-flex items-center gap-2 text-sm">
+                <input
+                  type="radio"
+                  name="person_doc"
+                  checked={personDoc === "id_card"}
+                  onChange={() => setPersonDoc("id_card")}
+                />
+                Dowód osobisty (PL)
+              </label>
+
+              <label className="inline-flex items-center gap-2 text-sm">
+                <input
+                  type="radio"
+                  name="person_doc"
+                  checked={personDoc === "passport"}
+                  onChange={() => setPersonDoc("passport")}
+                />
+                Paszport / dokument EU
+              </label>
+            </div>
+          </div>
+        )}
 
         <div className="mt-4">
           <Grid>
