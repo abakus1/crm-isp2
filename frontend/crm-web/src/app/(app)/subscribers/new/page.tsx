@@ -69,6 +69,9 @@ function Grid({ children }: { children: React.ReactNode }) {
 export default function SubscriberNewPage() {
   const [kind, setKind] = useState<SubscriberKind>("person");
   const [personDoc, setPersonDoc] = useState<PersonDocType>("id_card");
+  const [reps, setReps] = useState<Array<{ first_name: string; last_name: string }>>([
+    { first_name: "", last_name: "" },
+  ]);
 
   const isCompany = kind !== "person";
   const showCeidg = kind === "jdg" || kind === "spolka_cywilna";
@@ -95,7 +98,6 @@ export default function SubscriberNewPage() {
           ] as Field[])),
       { key: "kyc_scan", label: "Skan dokumentu KYC", helper: "UI-only: docelowo upload + audyt" },
     ];
-
 
     const companyCore: Field[] = [
       { key: "name", label: "Nazwa" },
@@ -179,6 +181,76 @@ export default function SubscriberNewPage() {
           </div>
         )}
 
+        {isCompany && (
+          <div className="mt-4 rounded-xl border bg-card p-4">
+            <div className="flex items-start justify-between gap-4">
+              <div>
+                <div className="text-sm font-semibold">Reprezentanci (wymagane)</div>
+                <div className="text-xs text-muted-foreground mt-1">
+                  Dla każdej firmy/jednostki musimy mieć co najmniej jedną osobę upoważnioną do reprezentacji (Imię + Nazwisko).
+                </div>
+              </div>
+
+              <button
+                type="button"
+                className="rounded-md border px-3 py-2 text-sm hover:bg-muted/40"
+                onClick={() => setReps((prev) => [...prev, { first_name: "", last_name: "" }])}
+              >
+                + Dodaj osobę
+              </button>
+            </div>
+
+            <div className="mt-4 space-y-3">
+              {reps.map((r, idx) => (
+                <div key={idx} className="rounded-lg border bg-muted/20 p-3">
+                  <div className="flex items-center justify-between gap-3">
+                    <div className="text-sm font-medium">Osoba #{idx + 1}</div>
+                    <button
+                      type="button"
+                      className="rounded-md border px-2 py-1 text-xs hover:bg-muted/40"
+                      onClick={() =>
+                        setReps((prev) => {
+                          if (prev.length <= 1) return prev; // nie pozwalamy zejść poniżej 1
+                          return prev.filter((_, i) => i !== idx);
+                        })
+                      }
+                    >
+                      Usuń
+                    </button>
+                  </div>
+
+                  <div className="mt-3 grid grid-cols-1 md:grid-cols-2 gap-3">
+                    <label className="block">
+                      <div className="text-xs text-muted-foreground mb-1">Imię</div>
+                      <input
+                        className="w-full rounded-md border bg-background px-3 py-2 text-sm"
+                        value={r.first_name}
+                        onChange={(e) =>
+                          setReps((prev) => prev.map((x, i) => (i === idx ? { ...x, first_name: e.target.value } : x)))
+                        }
+                      />
+                    </label>
+                    <label className="block">
+                      <div className="text-xs text-muted-foreground mb-1">Nazwisko</div>
+                      <input
+                        className="w-full rounded-md border bg-background px-3 py-2 text-sm"
+                        value={r.last_name}
+                        onChange={(e) =>
+                          setReps((prev) => prev.map((x, i) => (i === idx ? { ...x, last_name: e.target.value } : x)))
+                        }
+                      />
+                    </label>
+                  </div>
+                </div>
+              ))}
+            </div>
+
+            <div className="mt-3 text-xs text-muted-foreground">
+              UI-only: na razie nie zapisujemy. Docelowo: walidacja backendowa + audit (kto dodał/zmienił).
+            </div>
+          </div>
+        )}
+
         <div className="mt-4">
           <Grid>
             {fields.map((f) => (
@@ -188,6 +260,7 @@ export default function SubscriberNewPage() {
         </div>
       </Section>
 
+      {/* reszta pliku bez zmian */}
       <Section
         title="Adresy"
         desc="Z excela: siedziba firmy / zameldowania / zamieszkania / korespondencyjny / fakturowy / płatnika. Tu tylko układ UI."
@@ -223,7 +296,7 @@ export default function SubscriberNewPage() {
         </div>
       </Section>
 
-      <Section title="Zgody" desc="RODO (wymagana), e‑faktury/panel, marketing + preferencje kanałów.">
+      <Section title="Zgody" desc="RODO (wymagana), e-faktury/panel, marketing + preferencje kanałów.">
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-3">
           <div className="rounded-xl border bg-card p-4 space-y-3">
             <label className="flex items-start gap-2 text-sm">
@@ -236,7 +309,7 @@ export default function SubscriberNewPage() {
             <label className="flex items-start gap-2 text-sm">
               <input type="checkbox" defaultChecked />
               <span>
-                Zgoda na e‑faktury / panel klienta
+                Zgoda na e-faktury / panel klienta
                 <div className="text-xs text-muted-foreground">Docelowo: rabat X PLN/mc (konfig).</div>
               </span>
             </label>
@@ -258,7 +331,7 @@ export default function SubscriberNewPage() {
                 <div className="text-sm font-medium">Operacyjne</div>
                 <div className="mt-2 space-y-2 text-sm">
                   <label className="flex items-center gap-2">
-                    <input type="checkbox" defaultChecked /> e‑mail
+                    <input type="checkbox" defaultChecked /> e-mail
                   </label>
                   <label className="flex items-center gap-2">
                     <input type="checkbox" defaultChecked /> SMS
@@ -272,7 +345,7 @@ export default function SubscriberNewPage() {
                 <div className="text-sm font-medium">Marketing</div>
                 <div className="mt-2 space-y-2 text-sm">
                   <label className="flex items-center gap-2">
-                    <input type="checkbox" /> e‑mail
+                    <input type="checkbox" /> e-mail
                   </label>
                   <label className="flex items-center gap-2">
                     <input type="checkbox" /> SMS

@@ -85,6 +85,10 @@ function SubscriberBasics({ s }: { s: SubscriberRecord }) {
   const isJdg = s.kind === "jdg";
   const isCompany = s.kind === "spolka_os" || s.kind === "spolka_praw" || s.kind === "jednostka";
 
+  // UI-only: firmy muszą mieć osobę/osoby upoważnione do reprezentacji.
+  // Nie łamiemy kompatybilności: jeśli seed nie ma jeszcze tego pola, UI pokaże ostrzeżenie.
+  const reps = (s as any).representatives as Array<{ first_name: string; last_name: string }> | undefined;
+
   return (
     <div className="grid grid-cols-1 lg:grid-cols-2 gap-3">
       <Card
@@ -93,16 +97,49 @@ function SubscriberBasics({ s }: { s: SubscriberRecord }) {
       >
         <KV k="Rodzaj abonenta" v={formatKind(s.kind)} />
         <KV k="Status" v={formatStatus(s.status)} />
-        <KV k="Obywatelstwo" v={s.citizenship} />
+
+        {/* Nie pokazujemy zbędnych danych: obywatelstwo nie dotyczy spółek/jednostek */}
+        {!isCompany && <KV k="Obywatelstwo" v={s.citizenship} />}
 
         {(isPerson || isJdg) && <KV k="Imię" v={s.first_name} />}
         {(isPerson || isJdg) && <KV k="Nazwisko" v={s.last_name} />}
 
         {(isJdg || isCompany) && <KV k="Nazwa" v={s.company_name ?? s.display_name} />}
+
+        {/* Firmy/JDG: pokazujemy kluczowe identyfikatory */}
         {(isJdg || isCompany) && <KV k="NIP" v={s.nip} />}
-        {isCompany && <KV k="KRS" v={s.krs} />}
         {(isJdg || isCompany) && <KV k="REGON" v={s.regon} />}
+        {isCompany && <KV k="KRS" v={s.krs} />}
         {isJdg && <KV k="CEIDG" v={s.ceidg} />}
+
+        {/* Reprezentanci: wymagane dla spółek/jednostek */}
+        {isCompany && (
+          <div className="mt-3 rounded-lg border bg-muted/20 p-3">
+            <div className="flex items-center justify-between gap-3">
+              <div className="text-xs text-muted-foreground">Osoby upoważnione do reprezentacji</div>
+              <span
+                className={[
+                  "inline-flex items-center rounded-md border px-2 py-0.5 text-xs",
+                  !reps || reps.length === 0 ? "border-destructive/40 text-destructive" : "bg-muted/30",
+                ].join(" ")}
+              >
+                {!reps || reps.length === 0 ? "BRAK (wymagane)" : `${reps.length} osoba/osób`}
+              </span>
+            </div>
+
+            {!reps || reps.length === 0 ? (
+              <div className="mt-2 text-sm">Dodaj co najmniej 1 reprezentanta (Imię + Nazwisko).</div>
+            ) : (
+              <ul className="mt-2 space-y-1">
+                {reps.map((r, idx) => (
+                  <li key={`${r.first_name}-${r.last_name}-${idx}`} className="text-sm">
+                    {idx + 1}. {r.first_name} {r.last_name}
+                  </li>
+                ))}
+              </ul>
+            )}
+          </div>
+        )}
 
         {isPerson && <KV k="PESEL" v={s.pesel} />}
         {(isPerson || isJdg) && <KV k="Seria/nr dowodu" v={s.id_card_no} />}

@@ -51,6 +51,10 @@ export type SubscriberRecord = {
   status: SubscriberStatus;
   display_name: string;
 
+  // For any non-person subscriber we want at least one authorized representative.
+  // (UI-only for now; backend will enforce this as a real invariant.)
+  representatives?: Array<{ first_name: string; last_name: string }>;
+
   citizenship?: string;
   first_name?: string;
   last_name?: string;
@@ -182,6 +186,7 @@ export function seedSubscribers(): SubscriberRecord[] {
       first_name: "Anna",
       last_name: "Nowak",
       company_name: "Studio Pixel",
+      representatives: [{ first_name: "Anna", last_name: "Nowak" }],
       ceidg: "CEIDG-123456 (placeholder)",
       email: "kontakt@studiopixel.pl",
       phone: "+48 600 555 111",
@@ -219,6 +224,10 @@ export function seedSubscribers(): SubscriberRecord[] {
       display_name: "Gemini Sample Sp. z o.o.",
       citizenship: "PL",
       company_name: "Gemini Sample Sp. z o.o.",
+      representatives: [
+        { first_name: "Jan", last_name: "Prezes" },
+        { first_name: "Maria", last_name: "Członek Zarządu" },
+      ],
       email: "biuro@gemini-sample.pl",
       phone: "+48 600 999 000",
       nip: "9450000000",
