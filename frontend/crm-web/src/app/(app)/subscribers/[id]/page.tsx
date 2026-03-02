@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useParams } from "next/navigation";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 
 import { formatKind, formatStatus, seedSubscribers, type SubscriberRecord } from "@/lib/mockSubscribers";
 
@@ -83,7 +83,13 @@ function YesNo(v?: boolean) {
 function SubscriberBasics({ s }: { s: SubscriberRecord }) {
   const isPerson = s.kind === "person";
   const isJdg = s.kind === "jdg";
-  const isCompany = s.kind === "spolka_os" || s.kind === "spolka_praw" || s.kind === "jednostka";
+  // Company-like legal forms in our UI taxonomy (see src/lib/mockSubscribers.ts)
+  const isCompany =
+    s.kind === "spolka_cywilna" ||
+    s.kind === "spolka_osobowa" ||
+    s.kind === "spolka_kapitalowa" ||
+    s.kind === "fundacja" ||
+    s.kind === "jednostka_budzetowa";
 
   // UI-only: firmy muszą mieć osobę/osoby upoważnione do reprezentacji.
   // Nie łamiemy kompatybilności: jeśli seed nie ma jeszcze tego pola, UI pokaże ostrzeżenie.
@@ -166,6 +172,58 @@ function SubscriberBasics({ s }: { s: SubscriberRecord }) {
   );
 }
 
+/* =========================
+   ADRESY – poprawiona logika
+   ========================= */
+
+type UiAddress = {
+  label: string;
+  note?: string;
+  street: string;
+  building_no: string;
+  apartment_no?: string;
+  postal_code: string;
+  city: string;
+  country: string;
+
+  // UI-only: “pierwsza linia” dla płatnika, gdy NIE jest identyczny z adresem głównym
+  payer_name?: string;
+};
+
+function TextInput({
+  value,
+  onChange,
+  disabled,
+  placeholder,
+}: {
+  value?: string;
+  onChange: (v: string) => void;
+  disabled?: boolean;
+  placeholder?: string;
+}) {
+  return (
+    <input
+      value={value ?? ""}
+      placeholder={placeholder}
+      disabled={disabled}
+      onChange={(e) => onChange(e.target.value)}
+      className={[
+        "w-full rounded-md border px-3 py-2 text-sm bg-background",
+        disabled ? "opacity-70 cursor-not-allowed" : "",
+      ].join(" ")}
+    />
+  );
+}
+
+function Field({ label, children }: { label: string; children: React.ReactNode }) {
+  return (
+    <div>
+      <div className="text-xs text-muted-foreground mb-1">{label}</div>
+      {children}
+    </div>
+  );
+}
+
 function Addresses({ s }: { s: SubscriberRecord }) {
   const labelMap: Record<string, string> = {
     siedziba_firmy: "Siedziba firmy",
@@ -176,23 +234,214 @@ function Addresses({ s }: { s: SubscriberRecord }) {
     platnika: "Adres płatnika",
   };
 
+  const isPerson = s.kind === "person";
+  const isJdg = s.kind === "jdg";
+  const isCompany =
+    s.kind === "spolka_cywilna" ||
+    s.kind === "spolka_osobowa" ||
+    s.kind === "spolka_kapitalowa" ||
+    s.kind === "fundacja" ||
+    s.kind === "jednostka_budzetowa";
+
+  // JDG traktujemy jak “firma” dla adresów (siedziba jako główny).
+  const isBusiness = isJdg || isCompany;
+
+  const primaryLabel = isBusiness ? "siedziba_firmy" : "zamieszkania";
+  const primaryCopyLabel = isBusiness ? "adres siedziby" : "adres zamieszkania";
+
+  const initialAddresses = useMemo<UiAddress[]>(() => {
+    return (s.addresses ?? []).map((a) => ({
+      label: a.label,
+      note: a.note,
+      street: a.street ?? "",
+      building_no: a.building_no ?? "",
+      apartment_no: a.apartment_no ?? "",
+      postal_code: a.postal_code ?? "",
+      city: a.city ?? "",
+      country: a.country ?? "",
+      payer_name: "",
+    }));
+  }, [s.addresses]);
+
+  const [addresses, setAddresses] = useState<UiAddress[]>(initialAddresses);
+
+  // checkboxy: które adresy są “identyczne jak główny”
+  const [sameAsPrimary, setSameAsPrimary] = useState<Record<string, boolean>>(() => {
+    const map: Record<string, boolean> = {};
+    (s.addresses ?? []).forEach((a) => {
+      if (a.label === primaryLabel) return;
+      map[a.label] = true; // domyślnie: identyczne (Twoja zasada “standardowo pozostałe mają checkbox”)
+    });
+    return map;
+  });
+
+  // helper: kopiowanie z adresu głównego
+  const primary = useMemo(() => addresses.find((a) => a.label === primaryLabel) ?? null, [addresses, primaryLabel]);
+
+  const copyFromPrimary = (label: string) => {
+    if (!primary) return;
+    setAddresses((prev) =>
+      prev.map((x) => {
+        if (x.label !== label) return x;
+        return {
+          ...x,
+          street: primary.street,
+          building_no: primary.building_no,
+          apartment_no: primary.apartment_no,
+          postal_code: primary.postal_code,
+          city: primary.city,
+          country: primary.country,
+        };
+      })
+    );
+  };
+
+  // gdy primary się zmienia: aktualizujemy wszystkie, które są “sameAsPrimary”
+  useEffect(() => {
+    if (!primary) return;
+    setAddresses((prev) =>
+      prev.map((x) => {
+        if (x.label === primaryLabel) return x;
+        if (!sameAsPrimary[x.label]) return x;
+        return {
+          ...x,
+          street: primary.street,
+          building_no: primary.building_no,
+          apartment_no: primary.apartment_no,
+          postal_code: primary.postal_code,
+          city: primary.city,
+          country: primary.country,
+        };
+      })
+    );
+  }, [primary?.street, primary?.building_no, primary?.apartment_no, primary?.postal_code, primary?.city, primary?.country, primaryLabel, sameAsPrimary, primary]);
+
+  if (!addresses || addresses.length === 0) {
+    return (
+      <div className="rounded-xl border bg-muted/20 p-4 text-sm text-muted-foreground">Brak adresów (placeholder)</div>
+    );
+    }
+
   return (
     <div className="grid grid-cols-1 lg:grid-cols-2 gap-3">
-      {s.addresses.length === 0 && (
-        <div className="rounded-xl border bg-muted/20 p-4 text-sm text-muted-foreground">Brak adresów (placeholder)</div>
-      )}
-      {s.addresses.map((a, idx) => (
-        <Card key={`${a.label}-${idx}`} title={labelMap[a.label] ?? a.label} desc={a.note}>
-          <div className="text-sm">
-            {a.street} {a.building_no}
-            {a.apartment_no ? `/${a.apartment_no}` : ""}
-          </div>
-          <div className="text-sm">
-            {a.postal_code} {a.city}
-          </div>
-          <div className="text-xs text-muted-foreground mt-2">{a.country}</div>
-        </Card>
-      ))}
+      {addresses.map((a) => {
+        const isPrimary = a.label === primaryLabel;
+        const isLinked = !isPrimary && (sameAsPrimary[a.label] ?? true);
+
+        return (
+          <Card
+            key={a.label}
+            title={labelMap[a.label] ?? a.label}
+            desc={a.note ?? (isPrimary ? "Adres główny" : undefined)}
+          >
+            {!isPrimary && (
+              <label className="flex items-center gap-2 text-xs text-muted-foreground">
+                <input
+                  type="checkbox"
+                  checked={sameAsPrimary[a.label] ?? true}
+                  onChange={(e) => {
+                    const checked = e.target.checked;
+                    setSameAsPrimary((prev) => ({ ...prev, [a.label]: checked }));
+                    if (checked) {
+                      copyFromPrimary(a.label);
+                    }
+                  }}
+                />
+                Identyczny jak {primaryCopyLabel}
+              </label>
+            )}
+
+            {/* specjalny case: PŁATNIK, gdy NIE identyczny */}
+            {a.label === "platnika" && !isPrimary && !isLinked && (
+              <Field label="Nazwa płatnika (pierwsza linia)">
+                <TextInput
+                  value={a.payer_name}
+                  onChange={(v) =>
+                    setAddresses((prev) => prev.map((x) => (x.label === a.label ? { ...x, payer_name: v } : x)))
+                  }
+                  placeholder="np. Jan Kowalski / ACME Sp. z o.o."
+                />
+              </Field>
+            )}
+
+            <div className="grid grid-cols-1 gap-3">
+              <Field label="Ulica">
+                <TextInput
+                  value={a.street}
+                  disabled={!isPrimary && isLinked}
+                  onChange={(v) =>
+                    setAddresses((prev) => prev.map((x) => (x.label === a.label ? { ...x, street: v } : x)))
+                  }
+                />
+              </Field>
+
+              <div className="grid grid-cols-2 gap-3">
+                <Field label="Nr budynku">
+                  <TextInput
+                    value={a.building_no}
+                    disabled={!isPrimary && isLinked}
+                    onChange={(v) =>
+                      setAddresses((prev) => prev.map((x) => (x.label === a.label ? { ...x, building_no: v } : x)))
+                    }
+                  />
+                </Field>
+
+                <Field label="Nr lokalu">
+                  <TextInput
+                    value={a.apartment_no}
+                    disabled={!isPrimary && isLinked}
+                    onChange={(v) =>
+                      setAddresses((prev) => prev.map((x) => (x.label === a.label ? { ...x, apartment_no: v } : x)))
+                    }
+                  />
+                </Field>
+              </div>
+
+              <div className="grid grid-cols-2 gap-3">
+                <Field label="Kod pocztowy">
+                  <TextInput
+                    value={a.postal_code}
+                    disabled={!isPrimary && isLinked}
+                    onChange={(v) =>
+                      setAddresses((prev) => prev.map((x) => (x.label === a.label ? { ...x, postal_code: v } : x)))
+                    }
+                  />
+                </Field>
+
+                <Field label="Miasto">
+                  <TextInput
+                    value={a.city}
+                    disabled={!isPrimary && isLinked}
+                    onChange={(v) =>
+                      setAddresses((prev) => prev.map((x) => (x.label === a.label ? { ...x, city: v } : x)))
+                    }
+                  />
+                </Field>
+              </div>
+
+              <Field label="Kraj">
+                <TextInput
+                  value={a.country}
+                  disabled={!isPrimary && isLinked}
+                  onChange={(v) =>
+                    setAddresses((prev) => prev.map((x) => (x.label === a.label ? { ...x, country: v } : x)))
+                  }
+                />
+              </Field>
+
+              <div className="text-[11px] text-muted-foreground">
+                {isPrimary
+                  ? isBusiness
+                    ? "Główny adres: siedziba firmy."
+                    : "Główny adres: zamieszkania."
+                  : isLinked
+                    ? "Wartości są automatycznie kopiowane z adresu głównego (checkbox włączony)."
+                    : "Wartości są niezależne (checkbox wyłączony)."}
+              </div>
+            </div>
+          </Card>
+        );
+      })}
     </div>
   );
 }
@@ -350,11 +599,7 @@ export default function SubscriberDetailsPage({ params }: { params: { id: string
               />
               <PlaceholderList
                 title="Windykacja"
-                items={[
-                  "Status windykacji / blokady — placeholder",
-                  "Notatki i działania — placeholder",
-                  "Sprawy sądowe — placeholder",
-                ]}
+                items={["Status windykacji / blokady — placeholder", "Notatki i działania — placeholder", "Sprawy sądowe — placeholder"]}
               />
             </div>
           )}
@@ -418,11 +663,7 @@ export default function SubscriberDetailsPage({ params }: { params: { id: string
               <PlaceholderList
                 title="Historia zgód"
                 hint="Docelowo: audyt (kto/kiedy/źródło), cofnięcie zgody działa od kolejnego okresu."
-                items={[
-                  "2026-02-20: RODO = true (staff/admin) — placeholder",
-                  "2026-02-20: e-faktury = true (panel) — placeholder",
-                  "—",
-                ]}
+                items={["2026-02-20: RODO = true (staff/admin) — placeholder", "2026-02-20: e-faktury = true (panel) — placeholder", "—"]}
               />
             </div>
           )}
@@ -431,10 +672,7 @@ export default function SubscriberDetailsPage({ params }: { params: { id: string
             <PlaceholderList
               title="Historia / notatki"
               hint="UI-only: docelowo activity log + audit, zgodnie z naszymi zasadami."
-              items={[
-                "Log aktywności (kto/kiedy/co/skąd/przed/po) — placeholder",
-                s.notes ? `Notatka: ${s.notes}` : "Notatki — brak",
-              ]}
+              items={["Log aktywności (kto/kiedy/co/skąd/przed/po) — placeholder", s.notes ? `Notatka: ${s.notes}` : "Notatki — brak"]}
             />
           )}
         </div>
