@@ -6,6 +6,9 @@ import { useEffect, useMemo, useState } from "react";
 
 import { formatKind, formatStatus, seedSubscribers, type SubscriberRecord } from "@/lib/mockSubscribers";
 
+import { SimpleModal } from "@/components/SimpleModal";
+import { PrgAddressFinder, type PrgAddressPick } from "@/components/PrgAddressFinder";
+
 type TabKey =
   | "dane"
   | "adresy"
@@ -195,6 +198,11 @@ type UiAddress = {
   building_no: string;
   apartment_no: string;
 
+  // PRG/TERYT
+  terc?: string;
+  simc?: string;
+  ulic?: string;
+
   // UI-only: “pierwsza linia” dla płatnika, gdy NIE jest identyczny z adresem głównym
   payer_name?: string;
 };
@@ -279,12 +287,36 @@ function Addresses({ s }: { s: SubscriberRecord }) {
         postal_code: a?.postal_code ?? "",
         city: a?.city ?? "",
         country: a?.country ?? "PL",
+        terc: a?.terc,
+        simc: a?.simc,
+        ulic: a?.ulic,
         payer_name: "",
       };
     });
   }, [s.addresses, visibleLabels]);
 
   const [addresses, setAddresses] = useState<UiAddress[]>(initialAddresses);
+
+  const [prgOpenFor, setPrgOpenFor] = useState<AddressKey | null>(null);
+
+  const applyPrgPick = (label: AddressKey, picked: PrgAddressPick) => {
+    setAddresses((prev) =>
+      prev.map((x) => {
+        if (x.label !== label) return x;
+        return {
+          ...x,
+          country: "PL",
+          city: picked.place_name,
+          street: picked.street_name,
+          building_no: picked.building_no,
+          terc: picked.terc,
+          simc: picked.simc,
+          ulic: picked.ulic,
+        };
+      })
+    );
+  };
+
 
   // checkboxy: które adresy są “identyczne jak główny”
   // - domyślnie: true
@@ -339,6 +371,9 @@ function Addresses({ s }: { s: SubscriberRecord }) {
           postal_code: primary.postal_code,
           city: primary.city,
           country: primary.country,
+          terc: primary.terc,
+          simc: primary.simc,
+          ulic: primary.ulic,
         };
       })
     );
@@ -359,6 +394,9 @@ function Addresses({ s }: { s: SubscriberRecord }) {
           postal_code: primary.postal_code,
           city: primary.city,
           country: primary.country,
+          terc: primary.terc,
+          simc: primary.simc,
+          ulic: primary.ulic,
         };
       })
     );
@@ -369,6 +407,9 @@ function Addresses({ s }: { s: SubscriberRecord }) {
     primary?.postal_code,
     primary?.city,
     primary?.country,
+    primary?.terc,
+    primary?.simc,
+    primary?.ulic,
     primaryLabel,
     sameAsPrimary,
     primary,
@@ -427,79 +468,100 @@ function Addresses({ s }: { s: SubscriberRecord }) {
             )}
 
             <div className="grid grid-cols-1 gap-3">
-              <Field label="Ulica">
-                <TextInput
-                  value={a.street}
-                  disabled={!isPrimary && isLinked}
-                  onChange={(v) =>
-                    setAddresses((prev) => prev.map((x) => (x.label === a.label ? { ...x, street: v } : x)))
-                  }
-                />
-              </Field>
-
-              <div className="grid grid-cols-2 gap-3">
-                <Field label="Nr budynku">
-                  <TextInput
-                    value={a.building_no}
-                    disabled={!isPrimary && isLinked}
-                    onChange={(v) =>
-                      setAddresses((prev) =>
-                        prev.map((x) => (x.label === a.label ? { ...x, building_no: v } : x))
-                      )
-                    }
+              <div className="space-y-3">
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                <Field label="Kraj">
+                  <input
+                    className="w-full rounded-md border px-3 py-2 text-sm bg-background opacity-70 cursor-not-allowed"
+                    value="Polska"
+                    readOnly
                   />
                 </Field>
 
-                <Field label="Nr lokalu">
-                  <TextInput
-                    value={a.apartment_no}
+                <div className="flex items-end gap-2">
+                  <Field label="Miasto (PRG)">
+                    <input
+                      className="w-full rounded-md border px-3 py-2 text-sm bg-background"
+                      value={a.city}
+                      readOnly
+                      placeholder="Wybierz z PRG"
+                    />
+                  </Field>
+                  <button
+                    type="button"
+                    className="h-10 rounded-md border border-border bg-background px-3 text-sm hover:bg-muted/40 disabled:opacity-50"
                     disabled={!isPrimary && isLinked}
-                    onChange={(v) =>
-                      setAddresses((prev) =>
-                        prev.map((x) => (x.label === a.label ? { ...x, apartment_no: v } : x))
-                      )
-                    }
-                  />
-                </Field>
-              </div>
+                    onClick={() => setPrgOpenFor(a.label)}
+                    title="Wyszukaj adres w PRG"
+                  >
+                    Szukaj PRG
+                  </button>
+                </div>
 
-              <div className="grid grid-cols-2 gap-3">
                 <Field label="Kod pocztowy">
                   <TextInput
                     value={a.postal_code}
-                    disabled={!isPrimary && isLinked}
                     onChange={(v) =>
-                      setAddresses((prev) =>
-                        prev.map((x) => (x.label === a.label ? { ...x, postal_code: v } : x))
-                      )
+                      setAddresses((prev) => prev.map((x) => (x.label === a.label ? { ...x, postal_code: v } : x)))
                     }
+                    disabled={!isPrimary && isLinked}
+                    placeholder="np. 30-001"
                   />
                 </Field>
 
-                <Field label="Miasto">
+                <Field label="Ulica (PRG)">
+                  <input
+                    className="w-full rounded-md border px-3 py-2 text-sm bg-background"
+                    value={a.street}
+                    readOnly
+                    placeholder="Wybierz z PRG"
+                  />
+                </Field>
+
+                <Field label="Numer budynku (PRG)">
+                  <input
+                    className="w-full rounded-md border px-3 py-2 text-sm bg-background"
+                    value={a.building_no}
+                    readOnly
+                    placeholder="Wybierz z PRG"
+                  />
+                </Field>
+
+                <Field label="Numer lokalu (opcjonalnie)">
                   <TextInput
-                    value={a.city}
-                    disabled={!isPrimary && isLinked}
+                    value={a.apartment_no}
                     onChange={(v) =>
-                      setAddresses((prev) => prev.map((x) => (x.label === a.label ? { ...x, city: v } : x)))
+                      setAddresses((prev) => prev.map((x) => (x.label === a.label ? { ...x, apartment_no: v } : x)))
                     }
+                    disabled={!isPrimary && isLinked}
+                    placeholder="np. 12"
                   />
                 </Field>
               </div>
 
-              <Field label="Kraj">
-                <TextInput
-                  value={a.country}
-                  disabled={!isPrimary && isLinked}
-                  onChange={(v) =>
-                    setAddresses((prev) =>
-                      prev.map((x) => (x.label === a.label ? { ...x, country: v } : x))
-                    )
-                  }
-                />
-              </Field>
-
               <div className="text-[11px] text-muted-foreground">
+                TERC: <span className="font-mono">{a.terc || "—"}</span> • SIMC:{" "}
+                <span className="font-mono">{a.simc || "—"}</span> • ULIC:{" "}
+                <span className="font-mono">{a.ulic || "—"}</span>
+              </div>
+
+              <SimpleModal
+                open={prgOpenFor === a.label}
+                title="Wyszukiwarka lokalizacji (PRG)"
+                description="Wybierz: miejscowość → ulica → budynek. TERC/SIMC/ULIC są pobierane z PRG."
+                onClose={() => setPrgOpenFor(null)}
+                className="w-[min(90vw,1100px)] h-[min(80vh,900px)] max-w-none"
+                bodyClassName="p-4"
+              >
+                <PrgAddressFinder
+                  onPick={(picked) => {
+                    applyPrgPick(a.label, picked);
+                    setPrgOpenFor(null);
+                  }}
+                />
+              </SimpleModal>
+            </div>
+<div className="text-[11px] text-muted-foreground">
                 {isPrimary
                   ? isBusiness
                     ? "Główny adres: siedziba firmy."

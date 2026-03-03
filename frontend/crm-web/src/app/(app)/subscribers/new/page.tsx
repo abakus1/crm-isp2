@@ -6,6 +6,9 @@ import { useMemo, useState, useEffect } from "react";
 import type { SubscriberKind } from "@/lib/mockSubscribers";
 import { formatKind } from "@/lib/mockSubscribers";
 
+import { SimpleModal } from "@/components/SimpleModal";
+import { PrgAddressFinder, type PrgAddressPick } from "@/components/PrgAddressFinder";
+
 type Field = { key: string; label: string; placeholder?: string; helper?: string };
 
 type PersonDocType = "id_card" | "passport";
@@ -82,7 +85,25 @@ type UiAddress = {
   street: string;
   building_no: string;
   apartment_no: string;
+
+  // PRG/TERYT
+  terc?: string;
+  simc?: string;
+  ulic?: string;
+
   payer_name: string; // tylko dla płatnika (gdy odznaczone "identyczny")
+};
+
+type AddressValue = {
+  country: string;
+  city: string;
+  postal_code: string;
+  street: string;
+  building_no: string;
+  apartment_no: string;
+  terc?: string;
+  simc?: string;
+  ulic?: string;
 };
 
 function AddressInput({
@@ -152,6 +173,9 @@ function AddressesForm({ kind }: { kind: SubscriberKind }) {
     street: "",
     building_no: "",
     apartment_no: "",
+    terc: undefined,
+    simc: undefined,
+    ulic: undefined,
     payer_name: "",
   });
 
@@ -174,6 +198,26 @@ function AddressesForm({ kind }: { kind: SubscriberKind }) {
     platnika: true,
   }));
 
+  const [prgOpenFor, setPrgOpenFor] = useState<AddressKey | null>(null);
+
+  const applyPrgPick = (key: AddressKey, picked: PrgAddressPick) => {
+    setAddr((prev) => ({
+      ...prev,
+      [key]: {
+        ...prev[key],
+        country: "PL",
+        city: picked.place_name,
+        street: picked.street_name,
+        building_no: picked.building_no,
+        terc: picked.terc,
+        simc: picked.simc,
+        ulic: picked.ulic,
+      },
+    }));
+  };
+
+
+
   const primary = addr[primaryKey];
 
   const setField = (key: AddressKey, field: keyof UiAddress, value: string) => {
@@ -182,6 +226,24 @@ function AddressesForm({ kind }: { kind: SubscriberKind }) {
       [key]: {
         ...prev[key],
         [field]: value,
+      },
+    }));
+  };
+
+  const setAddress = (key: AddressKey, next: AddressValue) => {
+    setAddr((prev) => ({
+      ...prev,
+      [key]: {
+        ...prev[key],
+        country: next.country,
+        city: next.city,
+        postal_code: next.postal_code,
+        street: next.street,
+        building_no: next.building_no,
+        apartment_no: next.apartment_no,
+        terc: next.terc,
+        simc: next.simc,
+        ulic: next.ulic,
       },
     }));
   };
@@ -197,6 +259,9 @@ function AddressesForm({ kind }: { kind: SubscriberKind }) {
         street: prev[primaryKey].street,
         building_no: prev[primaryKey].building_no,
         apartment_no: prev[primaryKey].apartment_no,
+        terc: prev[primaryKey].terc,
+        simc: prev[primaryKey].simc,
+        ulic: prev[primaryKey].ulic,
       },
     }));
   };
@@ -272,50 +337,109 @@ function AddressesForm({ kind }: { kind: SubscriberKind }) {
               </div>
             )}
 
-            <div className="mt-3 grid grid-cols-1 md:grid-cols-2 gap-3">
-              <AddressInput
-                label="Państwo"
-                value={addr[k].country}
-                onChange={(v) => setField(k, "country", v)}
-                placeholder="PL"
-                disabled={!isPrimary && linked}
-              />
-              <AddressInput
-                label="Miasto"
-                value={addr[k].city}
-                onChange={(v) => setField(k, "city", v)}
-                placeholder="Kraków"
-                disabled={!isPrimary && linked}
-              />
-              <AddressInput
-                label="Kod"
-                value={addr[k].postal_code}
-                onChange={(v) => setField(k, "postal_code", v)}
-                placeholder="30-001"
-                disabled={!isPrimary && linked}
-              />
-              <AddressInput
-                label="Ulica"
-                value={addr[k].street}
-                onChange={(v) => setField(k, "street", v)}
-                placeholder="Promienistych"
-                disabled={!isPrimary && linked}
-              />
-              <AddressInput
-                label="Numer budynku"
-                value={addr[k].building_no}
-                onChange={(v) => setField(k, "building_no", v)}
-                placeholder="11"
-                disabled={!isPrimary && linked}
-              />
-              <AddressInput
-                label="Numer lokalu"
-                value={addr[k].apartment_no}
-                onChange={(v) => setField(k, "apartment_no", v)}
-                placeholder="(opcjonalnie)"
-                disabled={!isPrimary && linked}
-              />
-            </div>
+            <div className="mt-3"><div className="space-y-3">
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                  <label className="block">
+                    <div className="text-xs text-muted-foreground mb-1">Kraj</div>
+                    <input
+                      className="w-full rounded-md border bg-background px-3 py-2 text-sm opacity-70 cursor-not-allowed"
+                      value="Polska"
+                      readOnly
+                    />
+                  </label>
+
+                  <div className="flex items-end gap-2">
+                    <label className="block flex-1">
+                      <div className="text-xs text-muted-foreground mb-1">Miasto (PRG)</div>
+                      <input
+                        className="w-full rounded-md border bg-background px-3 py-2 text-sm"
+                        value={addr[k].city}
+                        readOnly
+                        placeholder="Wybierz z PRG"
+                      />
+                    </label>
+                    <button
+                      type="button"
+                      className="h-10 rounded-md border border-border bg-background px-3 text-sm hover:bg-muted/40 disabled:opacity-50"
+                      disabled={!isPrimary && linked}
+                      onClick={() => setPrgOpenFor(k)}
+                      title="Wyszukaj adres w PRG"
+                    >
+                      Szukaj PRG
+                    </button>
+                  </div>
+
+                  <label className="block">
+                    <div className="text-xs text-muted-foreground mb-1">Kod pocztowy</div>
+                    <input
+                      className={[
+                        "w-full rounded-md border bg-background px-3 py-2 text-sm",
+                        !isPrimary && linked ? "opacity-70 cursor-not-allowed" : "",
+                      ].join(" ")}
+                      value={addr[k].postal_code}
+                      disabled={!isPrimary && linked}
+                      onChange={(e) => setField(k, "postal_code", e.target.value)}
+                      placeholder="np. 30-001"
+                    />
+                  </label>
+
+                  <label className="block">
+                    <div className="text-xs text-muted-foreground mb-1">Ulica (PRG)</div>
+                    <input
+                      className="w-full rounded-md border bg-background px-3 py-2 text-sm"
+                      value={addr[k].street}
+                      readOnly
+                      placeholder="Wybierz z PRG"
+                    />
+                  </label>
+
+                  <label className="block">
+                    <div className="text-xs text-muted-foreground mb-1">Numer budynku (PRG)</div>
+                    <input
+                      className="w-full rounded-md border bg-background px-3 py-2 text-sm"
+                      value={addr[k].building_no}
+                      readOnly
+                      placeholder="Wybierz z PRG"
+                    />
+                  </label>
+
+                  <label className="block">
+                    <div className="text-xs text-muted-foreground mb-1">Numer lokalu (opcjonalnie)</div>
+                    <input
+                      className={[
+                        "w-full rounded-md border bg-background px-3 py-2 text-sm",
+                        !isPrimary && linked ? "opacity-70 cursor-not-allowed" : "",
+                      ].join(" ")}
+                      value={addr[k].apartment_no}
+                      disabled={!isPrimary && linked}
+                      onChange={(e) => setField(k, "apartment_no", e.target.value)}
+                      placeholder="np. 12"
+                    />
+                  </label>
+                </div>
+
+                <div className="text-xs text-muted-foreground">
+                  TERC: <span className="font-mono">{addr[k].terc || "—"}</span> • SIMC:{" "}
+                  <span className="font-mono">{addr[k].simc || "—"}</span> • ULIC:{" "}
+                  <span className="font-mono">{addr[k].ulic || "—"}</span>
+                </div>
+
+                <SimpleModal
+                  open={prgOpenFor === k}
+                  title="Wyszukiwarka lokalizacji (PRG)"
+                  description="Wybierz: miejscowość → ulica → budynek. TERC/SIMC/ULIC są pobierane z PRG."
+                  onClose={() => setPrgOpenFor(null)}
+                  className="w-[min(90vw,1100px)] h-[min(80vh,900px)] max-w-none"
+                  bodyClassName="p-4"
+                >
+                  <PrgAddressFinder
+                    onPick={(picked) => {
+                      applyPrgPick(k, picked);
+                      setPrgOpenFor(null);
+                    }}
+                  />
+                </SimpleModal>
+              </div></div>
           </div>
         );
       })}

@@ -472,3 +472,7 @@ export function PrgAddressFinder({
     </div>
   );
 }
+
+// Backward/forward compatibility:
+// Some callers may use a default import. Keep both named + default exports.
+export default PrgAddressFinder;

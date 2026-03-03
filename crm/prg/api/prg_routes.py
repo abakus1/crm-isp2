@@ -450,7 +450,7 @@ def prg_lookup_places(
     q: str = Query(..., min_length=1, max_length=64, description="Prefix nazwy miejscowości"),
     limit: int = Query(default=20, ge=1, le=100),
     db: Session = Depends(get_db),
-    _me: StaffUser = Depends(require(Action.PRG_IMPORT_RUN)),
+    _me: StaffUser = Depends(require(Action.SUBSCRIBERS_WRITE)),
 ):
     qq = _norm_q(q)
     if len(qq) < 1:
@@ -498,7 +498,7 @@ def prg_lookup_streets(
     ),
     limit: int = Query(default=50, ge=1, le=200),
     db: Session = Depends(get_db),
-    _me: StaffUser = Depends(require(Action.PRG_IMPORT_RUN)),
+    _me: StaffUser = Depends(require(Action.SUBSCRIBERS_WRITE)),
 ):
     qq = _norm_q(q)
 
@@ -551,7 +551,7 @@ def prg_lookup_streets_global(
     ),
     limit: int = Query(default=50, ge=1, le=200),
     db: Session = Depends(get_db),
-    _me: StaffUser = Depends(require(Action.PRG_IMPORT_RUN)),
+    _me: StaffUser = Depends(require(Action.SUBSCRIBERS_WRITE)),
 ):
     qq = _norm_q(q)
     pq = _norm_q(place)
@@ -613,7 +613,7 @@ def prg_lookup_buildings(
     ulic: str = Query(..., min_length=1, max_length=8),
     limit: int = Query(default=500, ge=1, le=5000),
     db: Session = Depends(get_db),
-    _me: StaffUser = Depends(require(Action.PRG_IMPORT_RUN)),
+    _me: StaffUser = Depends(require(Action.SUBSCRIBERS_WRITE)),
 ):
     # Zwracamy listę budynków na ulicy w danej miejscowości.
     # Uwaga: potrafi być dużo – limit kontroluje payload.

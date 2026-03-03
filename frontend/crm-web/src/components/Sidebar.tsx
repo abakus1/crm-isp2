@@ -105,6 +105,11 @@ export function Sidebar() {
             ],
           },
           {
+            label: "Zasięgi",
+            href: "/config/coverage",
+            // UI-only: backend podepniemy później (coverage mapping: lokalizacja ↔ plan)
+          },
+          {
             label: "Uprawnienia",
             href: "/permissions",
             requireAny: ["rbac.roles.list", "rbac.actions.list"],
