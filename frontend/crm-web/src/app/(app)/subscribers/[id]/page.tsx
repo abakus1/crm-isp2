@@ -176,15 +176,24 @@ function SubscriberBasics({ s }: { s: SubscriberRecord }) {
    ADRESY – poprawiona logika
    ========================= */
 
+type AddressKey =
+  | "zamieszkania"
+  | "zameldowania"
+  | "siedziba_firmy"
+  | "korespondencyjny"
+  | "fakturowy"
+  | "platnika";
+
 type UiAddress = {
-  label: string;
+  label: AddressKey;
   note?: string;
+
+  country: string;
+  city: string;
+  postal_code: string;
   street: string;
   building_no: string;
-  apartment_no?: string;
-  postal_code: string;
-  city: string;
-  country: string;
+  apartment_no: string;
 
   // UI-only: “pierwsza linia” dla płatnika, gdy NIE jest identyczny z adresem głównym
   payer_name?: string;
@@ -225,7 +234,7 @@ function Field({ label, children }: { label: string; children: React.ReactNode }
 }
 
 function Addresses({ s }: { s: SubscriberRecord }) {
-  const labelMap: Record<string, string> = {
+  const labelMap: Record<AddressKey, string> = {
     siedziba_firmy: "Siedziba firmy",
     zameldowania: "Adres zameldowania",
     zamieszkania: "Adres zamieszkania",
@@ -246,39 +255,78 @@ function Addresses({ s }: { s: SubscriberRecord }) {
   // JDG traktujemy jak “firma” dla adresów (siedziba jako główny).
   const isBusiness = isJdg || isCompany;
 
-  const primaryLabel = isBusiness ? "siedziba_firmy" : "zamieszkania";
+  const visibleLabels: AddressKey[] = isBusiness
+    ? ["siedziba_firmy", "korespondencyjny", "fakturowy", "platnika"]
+    : ["zamieszkania", "zameldowania", "korespondencyjny", "fakturowy", "platnika"];
+
+  const primaryLabel: AddressKey = isBusiness ? "siedziba_firmy" : "zamieszkania";
   const primaryCopyLabel = isBusiness ? "adres siedziby" : "adres zamieszkania";
 
   const initialAddresses = useMemo<UiAddress[]>(() => {
-    return (s.addresses ?? []).map((a) => ({
-      label: a.label,
-      note: a.note,
-      street: a.street ?? "",
-      building_no: a.building_no ?? "",
-      apartment_no: a.apartment_no ?? "",
-      postal_code: a.postal_code ?? "",
-      city: a.city ?? "",
-      country: a.country ?? "",
-      payer_name: "",
-    }));
-  }, [s.addresses]);
+    const existing = new Map<AddressKey, any>();
+    (s.addresses ?? []).forEach((a: any) => {
+      existing.set(a.label as AddressKey, a);
+    });
+
+    return visibleLabels.map((lbl) => {
+      const a = existing.get(lbl);
+      return {
+        label: lbl,
+        note: a?.note,
+        street: a?.street ?? "",
+        building_no: a?.building_no ?? "",
+        apartment_no: a?.apartment_no ?? "",
+        postal_code: a?.postal_code ?? "",
+        city: a?.city ?? "",
+        country: a?.country ?? "PL",
+        payer_name: "",
+      };
+    });
+  }, [s.addresses, visibleLabels]);
 
   const [addresses, setAddresses] = useState<UiAddress[]>(initialAddresses);
 
   // checkboxy: które adresy są “identyczne jak główny”
-  const [sameAsPrimary, setSameAsPrimary] = useState<Record<string, boolean>>(() => {
-    const map: Record<string, boolean> = {};
-    (s.addresses ?? []).forEach((a) => {
-      if (a.label === primaryLabel) return;
-      map[a.label] = true; // domyślnie: identyczne (Twoja zasada “standardowo pozostałe mają checkbox”)
+  // - domyślnie: true
+  // - ale jeśli seed ma już dane inne niż primary, to ustawiamy false (żeby nie “nadpisać” na starcie)
+  const [sameAsPrimary, setSameAsPrimary] = useState<Record<AddressKey, boolean>>(() => {
+    const map = {} as Record<AddressKey, boolean>;
+
+    // init: wszystko poza primary = true
+    visibleLabels.forEach((lbl) => {
+      if (lbl === primaryLabel) return;
+      map[lbl] = true;
     });
+
+    // jeżeli w seedzie są różnice — checkbox off
+    const src = new Map<AddressKey, any>();
+    (s.addresses ?? []).forEach((a: any) => src.set(a.label as AddressKey, a));
+
+    const p = src.get(primaryLabel);
+    if (p) {
+      visibleLabels.forEach((lbl) => {
+        if (lbl === primaryLabel) return;
+        const a = src.get(lbl);
+        if (!a) return;
+
+        const eq =
+          (a.street ?? "") === (p.street ?? "") &&
+          (a.building_no ?? "") === (p.building_no ?? "") &&
+          (a.apartment_no ?? "") === (p.apartment_no ?? "") &&
+          (a.postal_code ?? "") === (p.postal_code ?? "") &&
+          (a.city ?? "") === (p.city ?? "") &&
+          (a.country ?? "") === (p.country ?? "");
+
+        if (!eq) map[lbl] = false;
+      });
+    }
+
     return map;
   });
 
-  // helper: kopiowanie z adresu głównego
   const primary = useMemo(() => addresses.find((a) => a.label === primaryLabel) ?? null, [addresses, primaryLabel]);
 
-  const copyFromPrimary = (label: string) => {
+  const copyFromPrimary = (label: AddressKey) => {
     if (!primary) return;
     setAddresses((prev) =>
       prev.map((x) => {
@@ -314,13 +362,25 @@ function Addresses({ s }: { s: SubscriberRecord }) {
         };
       })
     );
-  }, [primary?.street, primary?.building_no, primary?.apartment_no, primary?.postal_code, primary?.city, primary?.country, primaryLabel, sameAsPrimary, primary]);
+  }, [
+    primary?.street,
+    primary?.building_no,
+    primary?.apartment_no,
+    primary?.postal_code,
+    primary?.city,
+    primary?.country,
+    primaryLabel,
+    sameAsPrimary,
+    primary,
+  ]);
 
   if (!addresses || addresses.length === 0) {
     return (
-      <div className="rounded-xl border bg-muted/20 p-4 text-sm text-muted-foreground">Brak adresów (placeholder)</div>
+      <div className="rounded-xl border bg-muted/20 p-4 text-sm text-muted-foreground">
+        Brak adresów (placeholder)
+      </div>
     );
-    }
+  }
 
   return (
     <div className="grid grid-cols-1 lg:grid-cols-2 gap-3">
@@ -357,7 +417,9 @@ function Addresses({ s }: { s: SubscriberRecord }) {
                 <TextInput
                   value={a.payer_name}
                   onChange={(v) =>
-                    setAddresses((prev) => prev.map((x) => (x.label === a.label ? { ...x, payer_name: v } : x)))
+                    setAddresses((prev) =>
+                      prev.map((x) => (x.label === a.label ? { ...x, payer_name: v } : x))
+                    )
                   }
                   placeholder="np. Jan Kowalski / ACME Sp. z o.o."
                 />
@@ -381,7 +443,9 @@ function Addresses({ s }: { s: SubscriberRecord }) {
                     value={a.building_no}
                     disabled={!isPrimary && isLinked}
                     onChange={(v) =>
-                      setAddresses((prev) => prev.map((x) => (x.label === a.label ? { ...x, building_no: v } : x)))
+                      setAddresses((prev) =>
+                        prev.map((x) => (x.label === a.label ? { ...x, building_no: v } : x))
+                      )
                     }
                   />
                 </Field>
@@ -391,7 +455,9 @@ function Addresses({ s }: { s: SubscriberRecord }) {
                     value={a.apartment_no}
                     disabled={!isPrimary && isLinked}
                     onChange={(v) =>
-                      setAddresses((prev) => prev.map((x) => (x.label === a.label ? { ...x, apartment_no: v } : x)))
+                      setAddresses((prev) =>
+                        prev.map((x) => (x.label === a.label ? { ...x, apartment_no: v } : x))
+                      )
                     }
                   />
                 </Field>
@@ -403,7 +469,9 @@ function Addresses({ s }: { s: SubscriberRecord }) {
                     value={a.postal_code}
                     disabled={!isPrimary && isLinked}
                     onChange={(v) =>
-                      setAddresses((prev) => prev.map((x) => (x.label === a.label ? { ...x, postal_code: v } : x)))
+                      setAddresses((prev) =>
+                        prev.map((x) => (x.label === a.label ? { ...x, postal_code: v } : x))
+                      )
                     }
                   />
                 </Field>
@@ -424,7 +492,9 @@ function Addresses({ s }: { s: SubscriberRecord }) {
                   value={a.country}
                   disabled={!isPrimary && isLinked}
                   onChange={(v) =>
-                    setAddresses((prev) => prev.map((x) => (x.label === a.label ? { ...x, country: v } : x)))
+                    setAddresses((prev) =>
+                      prev.map((x) => (x.label === a.label ? { ...x, country: v } : x))
+                    )
                   }
                 />
               </Field>
@@ -482,6 +552,16 @@ export default function SubscriberDetailsPage({ params }: { params: { id: string
 
   const all = useMemo(() => seedSubscribers(), []);
   const s = useMemo(() => all.find((x) => x.id === id) ?? null, [all, id]);
+  // UI-only: Edycja danych abonenta jest dozwolona tylko, jeśli NIE ma żadnej podpisanej umowy.
+  // Docelowo: to będzie backend rule + statusy kontraktów.
+  const contracts = (s as any)?.contracts as Array<{ status?: string }> | undefined;
+  const hasSignedContract = Boolean(
+    contracts?.some((c) => {
+      const st = (c.status ?? "").toString().toLowerCase();
+      return st === "signed" || st === "planned" || st === "active" || st === "suspended" || st === "terminated";
+    })
+  );
+
   const [tab, setTab] = useState<TabKey>("dane");
 
   if (!s) {
@@ -517,8 +597,20 @@ export default function SubscriberDetailsPage({ params }: { params: { id: string
               </Link>
               <button
                 type="button"
-                className="rounded-md border px-3 py-2 text-sm hover:bg-muted/40"
-                onClick={() => alert("UI-only: edycję i walidacje dopniemy po zamknięciu UI.")}
+                disabled={hasSignedContract}
+                title={
+                  hasSignedContract
+                    ? "Edycja zablokowana: istnieje podpisana umowa (chronimy historię faktur/umów)."
+                    : "Edytuj dane abonenta (UI-only)"
+                }
+                className={[
+                  "rounded-md border px-3 py-2 text-sm",
+                  hasSignedContract ? "opacity-50 cursor-not-allowed" : "hover:bg-muted/40",
+                ].join(" ")}
+                onClick={() => {
+                  if (hasSignedContract) return;
+                  alert("UI-only: edycję i walidacje dopniemy po zamknięciu UI.");
+                }}
               >
                 Edytuj
               </button>
@@ -599,7 +691,11 @@ export default function SubscriberDetailsPage({ params }: { params: { id: string
               />
               <PlaceholderList
                 title="Windykacja"
-                items={["Status windykacji / blokady — placeholder", "Notatki i działania — placeholder", "Sprawy sądowe — placeholder"]}
+                items={[
+                  "Status windykacji / blokady — placeholder",
+                  "Notatki i działania — placeholder",
+                  "Sprawy sądowe — placeholder",
+                ]}
               />
             </div>
           )}
@@ -663,7 +759,11 @@ export default function SubscriberDetailsPage({ params }: { params: { id: string
               <PlaceholderList
                 title="Historia zgód"
                 hint="Docelowo: audyt (kto/kiedy/źródło), cofnięcie zgody działa od kolejnego okresu."
-                items={["2026-02-20: RODO = true (staff/admin) — placeholder", "2026-02-20: e-faktury = true (panel) — placeholder", "—"]}
+                items={[
+                  "2026-02-20: RODO = true (staff/admin) — placeholder",
+                  "2026-02-20: e-faktury = true (panel) — placeholder",
+                  "—",
+                ]}
               />
             </div>
           )}
@@ -672,7 +772,10 @@ export default function SubscriberDetailsPage({ params }: { params: { id: string
             <PlaceholderList
               title="Historia / notatki"
               hint="UI-only: docelowo activity log + audit, zgodnie z naszymi zasadami."
-              items={["Log aktywności (kto/kiedy/co/skąd/przed/po) — placeholder", s.notes ? `Notatka: ${s.notes}` : "Notatki — brak"]}
+              items={[
+                "Log aktywności (kto/kiedy/co/skąd/przed/po) — placeholder",
+                s.notes ? `Notatka: ${s.notes}` : "Notatki — brak",
+              ]}
             />
           )}
         </div>
