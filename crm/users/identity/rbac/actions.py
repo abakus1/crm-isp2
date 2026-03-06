@@ -64,6 +64,10 @@ class Action(str, Enum):
     PRG_LOCAL_POINT_APPROVE = "prg.local_point.approve"
     PRG_RECONCILE_RUN = "prg.reconcile.run"
 
+    # SMS / notifications config
+    SMS_CONFIG_READ = "sms.config.read"
+    SMS_CONFIG_WRITE = "sms.config.write"
+
     # Catalog / pricing config
     CATALOG_PRODUCTS_READ = "catalog.products.read"
     CATALOG_REQUIREMENTS_READ = "catalog.requirements.read"

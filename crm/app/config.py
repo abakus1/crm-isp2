@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass
+
+from crm.adapters.sms.smeskom_client import SmeskomConnectionSettings
 from pathlib import Path
 from typing import Dict, List
 from urllib.parse import quote_plus
@@ -100,6 +102,21 @@ class Settings:
     smtp_from: str
     smtp_starttls: bool
 
+    # --- SMS / SMeSKom ---
+    smskom_enabled: bool
+    smskom_primary_base_url: str
+    smskom_secondary_base_url: str
+    smskom_auth_mode: str
+    smskom_login: str
+    smskom_password: str
+    smskom_timeout_seconds: int
+    smskom_callback_enabled: bool
+    smskom_callback_url: str
+    smskom_callback_secret: str
+    smskom_inbound_mode: str
+    smskom_receive_mark_as_read: bool
+    smskom_receive_poll_interval_seconds: int
+
     # --- PRG (referencyjna baza adresów) ---
     prg_import_dir: str
     prg_auto_reconcile: bool
@@ -107,6 +124,25 @@ class Settings:
     prg_delete_file_after_import: bool
 
     security_allowlist_ips: str = ""
+
+
+    @property
+    def smeskom(self) -> SmeskomConnectionSettings:
+        return SmeskomConnectionSettings(
+            enabled=bool(self.smeskom_enabled),
+            primary_base_url=self.smeskom_primary_base_url,
+            secondary_base_url=self.smeskom_secondary_base_url,
+            auth_mode=self.smeskom_auth_mode,
+            login=self.smeskom_login,
+            password=self.smeskom_password,
+            timeout_seconds=int(self.smeskom_timeout_seconds),
+            callback_enabled=bool(self.smeskom_callback_enabled),
+            callback_url=self.smeskom_callback_url,
+            callback_secret=self.smeskom_callback_secret,
+            inbound_mode=self.smeskom_inbound_mode,
+            receive_mark_as_read=bool(self.smeskom_receive_mark_as_read),
+            receive_poll_interval_seconds=int(self.smeskom_receive_poll_interval_seconds),
+        )
 
     @property
     def database_url(self) -> str:
@@ -185,6 +221,20 @@ def get_settings(project_root: Path | None = None) -> Settings:
         db_user = req("DB_USER")
         db_password = req("DB_PASSWORD")
 
+    smskom_timeout_raw = os.getenv("SMESKOM_TIMEOUT_SECONDS", "").strip() or "10"
+    try:
+        smskom_timeout_seconds = int(smeskom_timeout_raw)
+    except ValueError as e:
+        raise RuntimeError(f"Invalid SMESKOM_TIMEOUT_SECONDS={smeskom_timeout_raw!r} (must be int)") from e
+
+    smskom_receive_poll_interval_raw = os.getenv("SMESKOM_RECEIVE_POLL_INTERVAL_SECONDS", "").strip() or "60"
+    try:
+        smskom_receive_poll_interval_seconds = int(smeskom_receive_poll_interval_raw)
+    except ValueError as e:
+        raise RuntimeError(
+            f"Invalid SMESKOM_RECEIVE_POLL_INTERVAL_SECONDS={smeskom_receive_poll_interval_raw!r} (must be int)"
+        ) from e
+
     # --- NORMALIZE SMTP FIELDS (empty when disabled) ---
     smtp_port_raw = os.getenv("SMTP_PORT", "").strip() or "587"
     try:
@@ -237,6 +287,21 @@ def get_settings(project_root: Path | None = None) -> Settings:
         smtp_pass=os.getenv("SMTP_PASS", "").strip(),
         smtp_from=os.getenv("SMTP_FROM", "").strip(),
         smtp_starttls=_is_truthy(os.getenv("SMTP_STARTTLS", "1")),
+
+        # --- SMS / SMeSKom ---
+        smskom_enabled=_is_truthy(os.getenv("SMESKOM_ENABLED", "0")),
+        smskom_primary_base_url=os.getenv("SMESKOM_PRIMARY_BASE_URL", "https://api1.smeskom.pl/api/v1").strip() or "https://api1.smeskom.pl/api/v1",
+        smskom_secondary_base_url=os.getenv("SMESKOM_SECONDARY_BASE_URL", "https://api2.smeskom.pl/api/v1").strip() or "https://api2.smeskom.pl/api/v1",
+        smskom_auth_mode=os.getenv("SMESKOM_AUTH_MODE", "basic").strip() or "basic",
+        smskom_login=os.getenv("SMESKOM_LOGIN", "").strip(),
+        smskom_password=os.getenv("SMESKOM_PASSWORD", "").strip(),
+        smskom_timeout_seconds=smeskom_timeout_seconds,
+        smskom_callback_enabled=_is_truthy(os.getenv("SMESKOM_CALLBACK_ENABLED", "0")),
+        smskom_callback_url=os.getenv("SMESKOM_CALLBACK_URL", "").strip(),
+        smskom_callback_secret=os.getenv("SMESKOM_CALLBACK_SECRET", "").strip(),
+        smskom_inbound_mode=os.getenv("SMESKOM_INBOUND_MODE", "callback").strip() or "callback",
+        smskom_receive_mark_as_read=_is_truthy(os.getenv("SMESKOM_RECEIVE_MARK_AS_READ", "1")),
+        smskom_receive_poll_interval_seconds=smeskom_receive_poll_interval_seconds,
 
         # --- PRG ---
         prg_import_dir=os.getenv("PRG_IMPORT_DIR", "var/prg/imports").strip() or "var/prg/imports",

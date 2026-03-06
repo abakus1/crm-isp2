@@ -105,6 +105,11 @@ export function Sidebar() {
             ],
           },
           {
+            label: "SMS",
+            href: "/config/sms",
+            requireAny: ["sms.config.read", "sms.config.write"],
+          },
+          {
             label: "Zasięgi",
             href: "/config/coverage",
             // UI-only: backend podepniemy później (coverage mapping: lokalizacja ↔ plan)

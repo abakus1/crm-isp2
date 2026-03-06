@@ -15,6 +15,7 @@ from crm.users.module import register as register_users
 from crm.prg.module import register as register_prg
 from crm.catalog.module import register as register_catalog
 from crm.contracts.module import register as register_contracts
+from crm.sms.module import register as register_sms
 
 from crm.app.config import get_settings
 from crm.users.identity.jwt_deps import get_claims
@@ -69,6 +70,7 @@ def create_app() -> FastAPI:
     register_prg(app)
     register_catalog(app)
     register_contracts(app)
+    register_sms(app)
 
     # --- Request context (ip/user-agent/request-id) ---
     @app.middleware("http")
