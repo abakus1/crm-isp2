@@ -2,6 +2,7 @@
 # Keep this file lightweight: only imports.
 
 from crm.db.models.billing import AccountAccess, PaymentPlanItem  # noqa: F401
+from crm.db.models.subscribers import Subscriber  # noqa: F401
 from crm.db.models.contracts import Contract, ContractVersion  # noqa: F401
 from crm.db.models.pricing import (  # noqa: F401
     CatalogPriceScheduleEvent,

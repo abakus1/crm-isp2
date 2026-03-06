@@ -4,10 +4,11 @@ import Link from "next/link";
 import { useParams } from "next/navigation";
 import { useEffect, useMemo, useState } from "react";
 
-import { formatKind, formatStatus, seedSubscribers, type SubscriberRecord } from "@/lib/mockSubscribers";
-
 import { SimpleModal } from "@/components/SimpleModal";
 import { PrgAddressFinder, type PrgAddressPick } from "@/components/PrgAddressFinder";
+import { ApiError, apiFetch } from "@/lib/api";
+import { useAuth } from "@/lib/auth";
+import { formatKind, formatStatus, seedSubscribers, type SubscriberRecord } from "@/lib/mockSubscribers";
 
 type TabKey =
   | "dane"
@@ -19,7 +20,8 @@ type TabKey =
   | "gpon"
   | "avios"
   | "zgody"
-  | "historia";
+  | "historia"
+  | "korespondencja";
 
 const TABS: Array<{ key: TabKey; label: string }> = [
   { key: "dane", label: "Dane" },
@@ -32,6 +34,7 @@ const TABS: Array<{ key: TabKey; label: string }> = [
   { key: "avios", label: "AVIOS" },
   { key: "zgody", label: "Zgody" },
   { key: "historia", label: "Historia" },
+  { key: "korespondencja", label: "Korespondencja" },
 ];
 
 function Tabs({ value, onChange }: { value: TabKey; onChange: (k: TabKey) => void }) {
@@ -81,6 +84,260 @@ function YesNo(v?: boolean) {
   if (v === true) return "TAK";
   if (v === false) return "NIE";
   return "—";
+}
+
+
+
+type SubscriberSmsRow = {
+  id: number;
+  subscriber_id: number | null;
+  status: string;
+  queue_key: string;
+  recipient_phone: string;
+  sender_name: string | null;
+  title: string | null;
+  body: string;
+  body_preview: string;
+  provider: string;
+  provider_message_id: string | null;
+  provider_last_status: string | null;
+  attempt_count: number;
+  max_attempts: number;
+  scheduled_at: string | null;
+  sent_at: string | null;
+  delivered_at: string | null;
+  created_at: string | null;
+  created_by_staff_user_id: number | null;
+  created_by_label: string | null;
+};
+
+type SendSubscriberSmsPayload = {
+  title: string;
+  recipient_phone: string;
+  body: string;
+  sender_name?: string | null;
+};
+
+function formatDateTime(value?: string | null) {
+  if (!value) return "—";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return value;
+  return new Intl.DateTimeFormat("pl-PL", {
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+  }).format(date);
+}
+
+function statusBadgeClass(status: string) {
+  switch ((status || "").toLowerCase()) {
+    case "queued":
+      return "border-yellow-500/30 bg-yellow-500/10 text-yellow-700 dark:text-yellow-300";
+    case "sent":
+      return "border-blue-500/30 bg-blue-500/10 text-blue-700 dark:text-blue-300";
+    case "delivered":
+      return "border-emerald-500/30 bg-emerald-500/10 text-emerald-700 dark:text-emerald-300";
+    case "failed":
+      return "border-red-500/30 bg-red-500/10 text-red-700 dark:text-red-300";
+    default:
+      return "border-border bg-muted/40 text-foreground";
+  }
+}
+
+function parseSubscriberNumericId(subscriberId: string): number | null {
+  const digits = subscriberId.replace(/\D+/g, "");
+  if (!digits) return null;
+  const parsed = Number.parseInt(digits, 10);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+function CorrespondenceSms({ s }: { s: SubscriberRecord }) {
+  const { token, logout } = useAuth();
+  const subscriberNumericId = useMemo(() => parseSubscriberNumericId(s.id), [s.id]);
+  const [rows, setRows] = useState<SubscriberSmsRow[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [submitting, setSubmitting] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [success, setSuccess] = useState<string | null>(null);
+  const [form, setForm] = useState<SendSubscriberSmsPayload>({
+    title: "",
+    recipient_phone: s.phone ?? "",
+    body: "",
+    sender_name: "",
+  });
+
+  async function loadMessages() {
+    if (!token || subscriberNumericId == null) return;
+    setLoading(true);
+    setError(null);
+    try {
+      const data = await apiFetch<SubscriberSmsRow[]>(`/sms/subscribers/${subscriberNumericId}/messages?limit=100`, {
+        method: "GET",
+        token,
+        onUnauthorized: () => logout(),
+      });
+      setRows(Array.isArray(data) ? data : []);
+    } catch (err) {
+      const msg = err instanceof ApiError ? err.message : "Nie udało się pobrać historii SMS.";
+      setError(msg);
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  useEffect(() => {
+    setForm((prev) => ({
+      ...prev,
+      recipient_phone: prev.recipient_phone || s.phone || "",
+    }));
+  }, [s.phone]);
+
+  useEffect(() => {
+    loadMessages();
+  }, [token, subscriberNumericId]);
+
+  async function handleSubmit(e: React.FormEvent<HTMLFormElement>) {
+    e.preventDefault();
+    if (!token || subscriberNumericId == null) return;
+    setSubmitting(true);
+    setError(null);
+    setSuccess(null);
+    try {
+      await apiFetch<{ message: { id: number } }>(`/sms/subscribers/${subscriberNumericId}/send`, {
+        method: "POST",
+        token,
+        onUnauthorized: () => logout(),
+        body: {
+          title: form.title.trim(),
+          recipient_phone: form.recipient_phone.trim(),
+          body: form.body.trim(),
+          sender_name: form.sender_name?.trim() || null,
+        },
+      });
+      setSuccess("SMS dodany do kolejki.");
+      setForm((prev) => ({ ...prev, title: "", body: "" }));
+      await loadMessages();
+    } catch (err) {
+      const msg = err instanceof ApiError ? err.message : "Nie udało się wysłać SMS.";
+      setError(msg);
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  if (subscriberNumericId == null) {
+    return (
+      <Card
+        title="Korespondencja → SMS"
+        desc="Mockowe ID abonenta nie daje się zmapować na numeric subscriber_id dla API. To jest ten klasyczny chochlik integracyjny."
+      >
+        <div className="text-sm text-muted-foreground">Brak numeric subscriber_id dla tego rekordu UI.</div>
+      </Card>
+    );
+  }
+
+  return (
+    <div className="grid grid-cols-1 xl:grid-cols-[420px_minmax(0,1fr)] gap-4">
+      <Card
+        title="Wyślij SMS"
+        desc="Thin UI nad kanoniczną kolejką SMS. Tytuł zapisujemy w meta wiadomości, żeby karta abonenta miała ludzki kontekst zamiast cyfrowej kaszanki."
+      >
+        <form className="space-y-3" onSubmit={handleSubmit}>
+          <Field label="Tytuł">
+            <TextInput value={form.title} onChange={(v) => setForm((prev) => ({ ...prev, title: v }))} placeholder="np. Przypomnienie o instalacji" />
+          </Field>
+          <Field label="Numer telefonu">
+            <TextInput
+              value={form.recipient_phone}
+              onChange={(v) => setForm((prev) => ({ ...prev, recipient_phone: v }))}
+              placeholder="np. +48 600 100 200"
+            />
+          </Field>
+          <Field label="Nadawca (opcjonalnie)">
+            <TextInput
+              value={form.sender_name ?? ""}
+              onChange={(v) => setForm((prev) => ({ ...prev, sender_name: v }))}
+              placeholder="np. Gemini"
+            />
+          </Field>
+          <Field label="Treść">
+            <textarea
+              value={form.body}
+              onChange={(e) => setForm((prev) => ({ ...prev, body: e.target.value }))}
+              placeholder="Treść SMS…"
+              rows={6}
+              className="w-full rounded-md border px-3 py-2 text-sm bg-background"
+            />
+          </Field>
+
+          {error && <div className="rounded-md border border-red-500/30 bg-red-500/10 px-3 py-2 text-sm text-red-700 dark:text-red-300">{error}</div>}
+          {success && <div className="rounded-md border border-emerald-500/30 bg-emerald-500/10 px-3 py-2 text-sm text-emerald-700 dark:text-emerald-300">{success}</div>}
+
+          <button
+            type="submit"
+            disabled={submitting || !form.title.trim() || !form.recipient_phone.trim() || !form.body.trim()}
+            className="rounded-md border px-3 py-2 text-sm hover:bg-muted/40 disabled:opacity-50 disabled:cursor-not-allowed"
+          >
+            {submitting ? "Kolejkowanie…" : "Wyślij do kolejki SMS"}
+          </button>
+        </form>
+      </Card>
+
+      <Card
+        title="Historia SMS"
+        desc="Widok per abonent: treść, tytuł, staff sender, numer, status i timestampy. Czyli dokładnie to, czego brakowało, żeby nie latać po systemie jak szalony chomik."
+      >
+        <div className="mb-3 flex items-center justify-between gap-3">
+          <div className="text-xs text-muted-foreground">subscriber_id API: {subscriberNumericId}</div>
+          <button
+            type="button"
+            onClick={() => loadMessages()}
+            disabled={loading}
+            className="rounded-md border px-3 py-1.5 text-sm hover:bg-muted/40 disabled:opacity-50"
+          >
+            {loading ? "Odświeżanie…" : "Odśwież"}
+          </button>
+        </div>
+
+        {rows.length === 0 ? (
+          <div className="rounded-lg border border-dashed p-4 text-sm text-muted-foreground">
+            {loading ? "Ładowanie historii…" : "Brak SMS dla tego abonenta."}
+          </div>
+        ) : (
+          <div className="space-y-3">
+            {rows.map((row) => (
+              <div key={row.id} className="rounded-xl border p-3">
+                <div className="flex flex-wrap items-start justify-between gap-3">
+                  <div>
+                    <div className="text-sm font-semibold">{row.title || "Bez tytułu"}</div>
+                    <div className="mt-1 text-xs text-muted-foreground">
+                      {row.created_by_label || "System"} • {row.recipient_phone} • {row.sender_name || "domyślny sender"}
+                    </div>
+                  </div>
+                  <span className={["inline-flex items-center rounded-md border px-2 py-1 text-xs font-medium", statusBadgeClass(row.status)].join(" ")}>
+                    {row.status}
+                  </span>
+                </div>
+
+                <div className="mt-3 whitespace-pre-wrap rounded-lg bg-muted/30 p-3 text-sm">{row.body}</div>
+
+                <div className="mt-3 grid grid-cols-1 gap-2 text-xs text-muted-foreground md:grid-cols-2">
+                  <div>Utworzono: {formatDateTime(row.created_at)}</div>
+                  <div>Zaplanowano: {formatDateTime(row.scheduled_at)}</div>
+                  <div>Wysłano: {formatDateTime(row.sent_at)}</div>
+                  <div>Dostarczono: {formatDateTime(row.delivered_at)}</div>
+                  <div>Provider status: {row.provider_last_status || "—"}</div>
+                  <div>Próby: {row.attempt_count} / {row.max_attempts}</div>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </Card>
+    </div>
+  );
 }
 
 function SubscriberBasics({ s }: { s: SubscriberRecord }) {
@@ -840,6 +1097,8 @@ export default function SubscriberDetailsPage({ params }: { params: { id: string
               ]}
             />
           )}
+
+          {tab === "korespondencja" && <CorrespondenceSms s={s} />}
         </div>
       </div>
     </div>

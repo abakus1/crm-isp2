@@ -67,6 +67,7 @@ class SubscriberSmsHistoryRow:
     queue_key: str
     recipient_phone: str
     sender_name: str | None
+    title: str | None
     body: str
     body_preview: str
     provider: str
@@ -329,6 +330,7 @@ class SmsQueueService:
                 SmsOutboundMessage.queue_key,
                 SmsOutboundMessage.recipient_phone,
                 SmsOutboundMessage.sender_name,
+                SmsOutboundMessage.meta,
                 SmsOutboundMessage.body,
                 SmsOutboundMessage.body_preview,
                 SmsOutboundMessage.provider,
@@ -350,7 +352,13 @@ class SmsQueueService:
             .limit(safe_limit)
         )
         rows = self.db.execute(stmt).all()
-        return [SubscriberSmsHistoryRow(**row._mapping) for row in rows]
+        out: list[SubscriberSmsHistoryRow] = []
+        for row in rows:
+            data = dict(row._mapping)
+            meta = data.pop("meta", None) or {}
+            data["title"] = str(meta.get("title") or "").strip() or None
+            out.append(SubscriberSmsHistoryRow(**data))
+        return out
 
     def get_summary(self) -> SmsQueueSummary:
         rows = self.db.execute(
@@ -630,6 +638,12 @@ class SmsQueueService:
         subscriber_id = int(subscriber_id_raw) if subscriber_id_raw not in (None, "") else None
         max_attempts = int(payload.get("max_attempts") or 3)
         meta = payload.get("meta") or {}
+        title_raw = payload.get("title")
+        if title_raw not in (None, ""):
+            if not isinstance(meta, dict):
+                raise SmsQueueValidationError("Pole meta musi być obiektem JSON.")
+            meta = dict(meta)
+            meta["title"] = str(title_raw).strip()
         scheduled_at_value = payload.get("scheduled_at")
 
         if not recipient_phone:

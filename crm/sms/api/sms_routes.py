@@ -79,6 +79,7 @@ class SmeskomTestOut(BaseModel):
 
 class SmsQueueMessageIn(BaseModel):
     subscriber_id: int | None = None
+    title: str | None = Field(default=None, max_length=160)
     recipient_phone: str = Field(min_length=3, max_length=64)
     body: str = Field(min_length=1, max_length=2000)
     sender_name: str | None = Field(default=None, max_length=32)
@@ -116,6 +117,7 @@ class SmsSubscriberMessageOut(BaseModel):
     queue_key: str
     recipient_phone: str
     sender_name: str | None
+    title: str | None = None
     body: str
     body_preview: str
     provider: str
@@ -130,6 +132,22 @@ class SmsSubscriberMessageOut(BaseModel):
     created_by_staff_user_id: int | None
     created_by_label: str | None
 
+
+
+
+class SmsSubscriberSendIn(BaseModel):
+    title: str = Field(min_length=1, max_length=160)
+    recipient_phone: str = Field(min_length=3, max_length=64)
+    body: str = Field(min_length=1, max_length=2000)
+    sender_name: str | None = Field(default=None, max_length=32)
+    queue_key: str = Field(default="subscriber_manual", min_length=1, max_length=64)
+    idempotency_key: str | None = Field(default=None, max_length=128)
+    scheduled_at: datetime | None = None
+    max_attempts: int = Field(default=3, ge=1, le=10)
+
+
+class SmsSubscriberSendOut(BaseModel):
+    message: SmsQueueMessageOut
 
 class SmsQueueSummaryOut(BaseModel):
     queued: int
@@ -269,6 +287,35 @@ def sms_subscriber_messages(
     service = SmsQueueService(db)
     rows = service.list_subscriber_messages(subscriber_id=subscriber_id, limit=limit)
     return [SmsSubscriberMessageOut.model_validate(row, from_attributes=True) for row in rows]
+
+
+
+
+@router.post(
+    "/subscribers/{subscriber_id}/send",
+    response_model=SmsSubscriberSendOut,
+    dependencies=[Depends(require(Action.SMS_QUEUE_WRITE))],
+)
+def sms_send_for_subscriber(
+    subscriber_id: int,
+    body: SmsSubscriberSendIn,
+    db: Session = Depends(get_db),
+    me: StaffUser = Depends(get_current_user),
+):
+    service = SmsQueueService(db)
+    try:
+        item = service.enqueue_message(
+            {
+                **body.model_dump(mode="json"),
+                "subscriber_id": subscriber_id,
+                "meta": {"title": body.title},
+            },
+            actor_staff_id=int(me.id),
+        )
+        return SmsSubscriberSendOut(message=SmsQueueMessageOut.model_validate(item, from_attributes=True))
+    except SmsQueueValidationError as exc:
+        db.rollback()
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 @router.post(
