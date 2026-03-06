@@ -62,6 +62,12 @@ class SmsWebhookEvent(Base):
     provider_status: Mapped[Optional[str]] = mapped_column(sa.String(64), nullable=True)
     received_at: Mapped[datetime] = mapped_column(sa.DateTime(timezone=True), nullable=False, server_default=sa.text("now()"))
     processed_at: Mapped[Optional[datetime]] = mapped_column(sa.DateTime(timezone=True), nullable=True)
+    processed_result: Mapped[Optional[str]] = mapped_column(sa.Text, nullable=True)
+    linked_sms_message_id: Mapped[Optional[int]] = mapped_column(
+        sa.BigInteger,
+        sa.ForeignKey(f"{SCHEMA}.sms_outbound_messages.id", ondelete="SET NULL"),
+        nullable=True,
+    )
 
 
 class SmsOutboundMessage(Base):
@@ -74,21 +80,35 @@ class SmsOutboundMessage(Base):
     direction: Mapped[str] = mapped_column(sa.String(16), nullable=False, server_default=sa.text("'outbound'"))
     queue_key: Mapped[str] = mapped_column(sa.String(64), nullable=False, server_default=sa.text("'default'"))
     idempotency_key: Mapped[Optional[str]] = mapped_column(sa.String(128), nullable=True)
+    subscriber_id: Mapped[Optional[int]] = mapped_column(
+        sa.BigInteger,
+        sa.ForeignKey(f"{SCHEMA}.subscribers.id", ondelete="SET NULL"),
+        nullable=True,
+    )
     recipient_phone: Mapped[str] = mapped_column(sa.String(64), nullable=False)
     sender_name: Mapped[Optional[str]] = mapped_column(sa.String(32), nullable=True)
     body: Mapped[str] = mapped_column(sa.Text, nullable=False)
     body_preview: Mapped[str] = mapped_column(sa.String(160), nullable=False)
     scheduled_at: Mapped[datetime] = mapped_column(sa.DateTime(timezone=True), nullable=False, server_default=sa.text("now()"))
+    next_attempt_at: Mapped[datetime] = mapped_column(sa.DateTime(timezone=True), nullable=False, server_default=sa.text("now()"))
     locked_at: Mapped[Optional[datetime]] = mapped_column(sa.DateTime(timezone=True), nullable=True)
+    lock_token: Mapped[Optional[str]] = mapped_column(sa.String(64), nullable=True)
+    lock_expires_at: Mapped[Optional[datetime]] = mapped_column(sa.DateTime(timezone=True), nullable=True)
     sent_at: Mapped[Optional[datetime]] = mapped_column(sa.DateTime(timezone=True), nullable=True)
     delivered_at: Mapped[Optional[datetime]] = mapped_column(sa.DateTime(timezone=True), nullable=True)
     last_error_at: Mapped[Optional[datetime]] = mapped_column(sa.DateTime(timezone=True), nullable=True)
+    last_error_message: Mapped[Optional[str]] = mapped_column(sa.Text, nullable=True)
     cancel_reason: Mapped[Optional[str]] = mapped_column(sa.String(255), nullable=True)
     attempt_count: Mapped[int] = mapped_column(sa.Integer, nullable=False, server_default=sa.text("0"))
     max_attempts: Mapped[int] = mapped_column(sa.Integer, nullable=False, server_default=sa.text("3"))
     provider_message_id: Mapped[Optional[str]] = mapped_column(sa.String(128), nullable=True)
     provider_last_status: Mapped[Optional[str]] = mapped_column(sa.String(64), nullable=True)
     provider_response_excerpt: Mapped[Optional[str]] = mapped_column(sa.Text, nullable=True)
+    delivered_by_webhook_event_id: Mapped[Optional[int]] = mapped_column(
+        sa.BigInteger,
+        sa.ForeignKey(f"{SCHEMA}.sms_webhook_events.id", ondelete="SET NULL"),
+        nullable=True,
+    )
     meta: Mapped[dict] = mapped_column(postgresql.JSONB(astext_type=sa.Text()), nullable=False, server_default=sa.text("'{}'::jsonb"))
     created_at: Mapped[datetime] = mapped_column(sa.DateTime(timezone=True), nullable=False, server_default=sa.text("now()"))
     updated_at: Mapped[datetime] = mapped_column(sa.DateTime(timezone=True), nullable=False, server_default=sa.text("now()"))

@@ -78,6 +78,7 @@ class SmeskomTestOut(BaseModel):
 
 
 class SmsQueueMessageIn(BaseModel):
+    subscriber_id: int | None = None
     recipient_phone: str = Field(min_length=3, max_length=64)
     body: str = Field(min_length=1, max_length=2000)
     sender_name: str | None = Field(default=None, max_length=32)
@@ -93,6 +94,7 @@ class SmsQueueMessageOut(BaseModel):
     provider: str
     status: str
     queue_key: str
+    subscriber_id: int | None = None
     recipient_phone: str
     sender_name: str | None
     body_preview: str
@@ -101,8 +103,32 @@ class SmsQueueMessageOut(BaseModel):
     provider_message_id: str | None
     provider_last_status: str | None
     scheduled_at: datetime
+    next_attempt_at: datetime | None = None
     sent_at: datetime | None
+    delivered_at: datetime | None = None
     created_at: datetime
+
+
+class SmsSubscriberMessageOut(BaseModel):
+    id: int
+    subscriber_id: int | None
+    status: str
+    queue_key: str
+    recipient_phone: str
+    sender_name: str | None
+    body: str
+    body_preview: str
+    provider: str
+    provider_message_id: str | None
+    provider_last_status: str | None
+    attempt_count: int
+    max_attempts: int
+    scheduled_at: datetime | None
+    sent_at: datetime | None
+    delivered_at: datetime | None
+    created_at: datetime | None
+    created_by_staff_user_id: int | None
+    created_by_label: str | None
 
 
 class SmsQueueSummaryOut(BaseModel):
@@ -112,6 +138,15 @@ class SmsQueueSummaryOut(BaseModel):
     failed: int
     cancelled: int
     delivered: int
+
+
+class SmsDispatchRunOut(BaseModel):
+    claimed: int
+    sent: int
+    delivered: int
+    failed: int
+    requeued: int
+    skipped: int
 
 
 class SmeskomWebhookOut(BaseModel):
@@ -220,6 +255,22 @@ def sms_queue_list(
     return [SmsQueueMessageOut.model_validate(item, from_attributes=True) for item in items]
 
 
+@router.get(
+    "/subscribers/{subscriber_id}/messages",
+    response_model=list[SmsSubscriberMessageOut],
+    dependencies=[Depends(require(Action.SUBSCRIBERS_READ))],
+)
+def sms_subscriber_messages(
+    subscriber_id: int,
+    limit: int = Query(default=100, ge=1, le=200),
+    db: Session = Depends(get_db),
+    _me: StaffUser = Depends(get_current_user),
+):
+    service = SmsQueueService(db)
+    rows = service.list_subscriber_messages(subscriber_id=subscriber_id, limit=limit)
+    return [SmsSubscriberMessageOut.model_validate(row, from_attributes=True) for row in rows]
+
+
 @router.post(
     "/queue/messages",
     response_model=SmsQueueMessageOut,
@@ -259,6 +310,34 @@ def sms_queue_dispatch_next(
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
+@router.post(
+    "/queue/dispatch-run",
+    response_model=SmsDispatchRunOut,
+    dependencies=[Depends(require(Action.SMS_QUEUE_WRITE))],
+)
+def sms_queue_dispatch_run(
+    batch_size: int = Query(default=20, ge=1, le=200),
+    process_delivery_reports: bool = Query(default=True),
+    db: Session = Depends(get_db),
+    me: StaffUser = Depends(get_current_user),
+):
+    service = SmsQueueService(db)
+    try:
+        result = service.dispatch_due_batch(actor_staff_id=int(me.id), batch_size=batch_size)
+        delivered_extra = service.process_delivery_reports(limit=batch_size * 2, actor_staff_id=int(me.id)) if process_delivery_reports else 0
+        return SmsDispatchRunOut(
+            claimed=result.claimed,
+            sent=result.sent,
+            delivered=result.delivered + delivered_extra,
+            failed=result.failed,
+            requeued=result.requeued,
+            skipped=result.skipped,
+        )
+    except SmsQueueValidationError as exc:
+        db.rollback()
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
 @router.api_route(
     "/hooks/smeskom",
     methods=["GET", "POST"],
@@ -272,6 +351,8 @@ async def smeskom_webhook_callback(
     service = SmeskomWebhookService(db)
     event = await service.handle_callback(request)
     accepted = event.status == "accepted"
+    if accepted and event.event_kind == "delivery_report":
+        SmsQueueService(db).process_delivery_reports(limit=10, actor_staff_id=None)
     code = 200 if accepted else 401
     return JSONResponse(
         status_code=code,

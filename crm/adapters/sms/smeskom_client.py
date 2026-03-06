@@ -59,6 +59,8 @@ class SmeskomConnectionResult:
     http_status: int | None
     provider_message: str
     response_excerpt: str | None = None
+    provider_message_id: str | None = None
+    provider_status: str | None = None
 
 
 class SmeskomClient:
@@ -93,6 +95,40 @@ class SmeskomClient:
             provider_message=str(last_error),
             response_excerpt=self._excerpt(self._stringify_detail(last_error.detail)),
         )
+
+    def send_sms(self, *, to: str, message: str, sender: str | None = None) -> SmeskomConnectionResult:
+        payload: dict[str, Any] = {"to": to, "message": message}
+        if sender:
+            payload["sender"] = sender
+        if self.settings.callback_enabled and self.settings.callback_url:
+            payload["callback_url"] = self.settings.callback_url
+        if self.settings.callback_secret:
+            payload["callback_secret"] = self.settings.callback_secret
+
+        last_error: SmeskomApiError | None = None
+        for base_url in self._candidate_urls():
+            try:
+                response = self._request("POST", base_url, "sms/send", payload=payload)
+                parsed = self._safe_json(response.get("body_text"))
+                provider_message_id = self._pick_first(parsed, ["message_id", "sms_id", "id", "msgid"])
+                provider_status = self._pick_first(parsed, ["status", "message_status", "state"]) or "sent"
+                return SmeskomConnectionResult(
+                    ok=True,
+                    base_url_used=base_url,
+                    auth_mode=self.settings.auth_mode,
+                    http_status=response["status_code"],
+                    provider_message="SMS przekazany do operatora.",
+                    response_excerpt=self._excerpt(response.get("body_text")),
+                    provider_message_id=provider_message_id,
+                    provider_status=provider_status,
+                )
+            except SmeskomApiError as exc:
+                last_error = exc
+                continue
+
+        if last_error is None:
+            raise SmeskomApiError("Nie udało się wysłać SMS przez SMeSKom.")
+        raise last_error
 
     def _candidate_urls(self) -> list[str]:
         urls: list[str] = []
@@ -177,3 +213,32 @@ class SmeskomClient:
             return json.dumps(detail, ensure_ascii=False)
         except Exception:
             return str(detail)
+
+    @staticmethod
+    def _safe_json(raw: str | None) -> dict[str, Any]:
+        if not raw:
+            return {}
+        try:
+            payload = json.loads(raw)
+            return payload if isinstance(payload, dict) else {"_raw": payload}
+        except Exception:
+            return {}
+
+    @staticmethod
+    def _pick_first(payload: dict[str, Any], keys: list[str]) -> str | None:
+        if not isinstance(payload, dict):
+            return None
+        for key in keys:
+            value = payload.get(key)
+            if value is None:
+                continue
+            if isinstance(value, list):
+                for item in value:
+                    normalized = str(item).strip()
+                    if normalized:
+                        return normalized
+                continue
+            normalized = str(value).strip()
+            if normalized:
+                return normalized
+        return None

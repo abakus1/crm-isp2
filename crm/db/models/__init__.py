@@ -25,4 +25,4 @@ from .service_catalog import (
     ServicePlanDependency,
 )
 
-from .sms import SmsSmeskomConfig, SmsWebhookEvent  # noqa: F401
+from .sms import SmsOutboundAttempt, SmsOutboundMessage, SmsSmeskomConfig, SmsWebhookEvent  # noqa: F401

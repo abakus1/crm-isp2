@@ -1,12 +1,13 @@
 from __future__ import annotations
 
 import json
+import uuid
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from fastapi import Request
-from sqlalchemy import func, select
+from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
 
 from crm.adapters.sms import SmeskomApiError, SmeskomClient, SmeskomConnectionSettings
@@ -17,7 +18,7 @@ from crm.db.models.sms import (
     SmsSmeskomConfig,
     SmsWebhookEvent,
 )
-from crm.db.models.staff import AuditLog
+from crm.db.models.staff import AuditLog, StaffUser
 from crm.shared.request_context import get_request_context
 
 
@@ -32,6 +33,10 @@ class SmsQueueValidationError(ValueError):
 ALLOWED_AUTH_MODES = {"basic", "body"}
 ALLOWED_INBOUND_MODES = {"callback", "polling"}
 ALLOWED_QUEUE_STATUSES = {"queued", "processing", "sent", "failed", "cancelled", "delivered"}
+DELIVERY_SUCCESS_STATUSES = {"delivered", "deliver", "doręczono", "ok", "success"}
+DELIVERY_FAILURE_STATUSES = {"failed", "error", "expired", "rejected", "undelivered"}
+LOCK_TTL_SECONDS = 120
+MAX_RESPONSE_EXCERPT = 1000
 
 
 @dataclass(frozen=True)
@@ -42,6 +47,39 @@ class SmsQueueSummary:
     failed: int
     cancelled: int
     delivered: int
+
+
+@dataclass(frozen=True)
+class SmsDispatchBatchResult:
+    claimed: int
+    sent: int
+    delivered: int
+    failed: int
+    requeued: int
+    skipped: int
+
+
+@dataclass(frozen=True)
+class SubscriberSmsHistoryRow:
+    id: int
+    subscriber_id: int | None
+    status: str
+    queue_key: str
+    recipient_phone: str
+    sender_name: str | None
+    body: str
+    body_preview: str
+    provider: str
+    provider_message_id: str | None
+    provider_last_status: str | None
+    attempt_count: int
+    max_attempts: int
+    scheduled_at: datetime | None
+    sent_at: datetime | None
+    delivered_at: datetime | None
+    created_at: datetime | None
+    created_by_staff_user_id: int | None
+    created_by_label: str | None
 
 
 class SmsConfigService:
@@ -108,7 +146,16 @@ class SmsConfigService:
         row.updated_by_staff_user_id = int(actor_staff_id)
 
         self.db.flush()
-        self._audit(actor_staff_id=actor_staff_id, action="SMS_CONFIG_UPDATE", severity="critical", entity_type="sms_smeskom_config", entity_id="1", before=before, after=self._row_public_dict(row), meta={"provider": "smeskom"})
+        self._audit(
+            actor_staff_id=actor_staff_id,
+            action="SMS_CONFIG_UPDATE",
+            severity="critical",
+            entity_type="sms_smeskom_config",
+            entity_id="1",
+            before=before,
+            after=self._row_public_dict(row),
+            meta={"provider": "smeskom"},
+        )
         self.db.commit()
         self.db.refresh(row)
         return row
@@ -222,21 +269,24 @@ class SmsQueueService:
         if existing is not None:
             return existing
 
+        now = datetime.now(timezone.utc)
         message = SmsOutboundMessage(
             provider="smeskom",
             status="queued",
             direction="outbound",
             queue_key=normalized["queue_key"],
             idempotency_key=normalized["idempotency_key"],
+            subscriber_id=normalized["subscriber_id"],
             recipient_phone=normalized["recipient_phone"],
             sender_name=normalized["sender_name"],
             body=normalized["body"],
             body_preview=self._build_body_preview(normalized["body"]),
             scheduled_at=normalized["scheduled_at"],
+            next_attempt_at=normalized["scheduled_at"],
             max_attempts=normalized["max_attempts"],
             meta=normalized["meta"],
             created_by_staff_user_id=int(actor_staff_id),
-            updated_at=datetime.now(timezone.utc),
+            updated_at=now,
         )
         self.db.add(message)
         self.db.flush()
@@ -248,7 +298,11 @@ class SmsQueueService:
             entity_id=str(message.id),
             before=None,
             after=self._message_public_dict(message),
-            meta={"provider": "smeskom", "queue_key": normalized["queue_key"]},
+            meta={
+                "provider": "smeskom",
+                "queue_key": normalized["queue_key"],
+                "subscriber_id": normalized["subscriber_id"],
+            },
         )
         self.db.commit()
         self.db.refresh(message)
@@ -261,8 +315,42 @@ class SmsQueueService:
             normalized_status = str(status).strip().lower()
             if normalized_status not in ALLOWED_QUEUE_STATUSES:
                 raise SmsQueueValidationError("Nieobsługiwany status kolejki SMS.")
-            stmt = select(SmsOutboundMessage).where(SmsOutboundMessage.status == normalized_status).order_by(SmsOutboundMessage.id.desc()).limit(safe_limit)
+            stmt = stmt.where(SmsOutboundMessage.status == normalized_status)
         return list(self.db.execute(stmt).scalars().all())
+
+    def list_subscriber_messages(self, *, subscriber_id: int, limit: int = 100) -> list[SubscriberSmsHistoryRow]:
+        safe_limit = max(1, min(int(limit), 200))
+        creator_label = func.trim(func.concat(func.coalesce(StaffUser.first_name, ""), " ", func.coalesce(StaffUser.last_name, "")))
+        stmt = (
+            select(
+                SmsOutboundMessage.id,
+                SmsOutboundMessage.subscriber_id,
+                SmsOutboundMessage.status,
+                SmsOutboundMessage.queue_key,
+                SmsOutboundMessage.recipient_phone,
+                SmsOutboundMessage.sender_name,
+                SmsOutboundMessage.body,
+                SmsOutboundMessage.body_preview,
+                SmsOutboundMessage.provider,
+                SmsOutboundMessage.provider_message_id,
+                SmsOutboundMessage.provider_last_status,
+                SmsOutboundMessage.attempt_count,
+                SmsOutboundMessage.max_attempts,
+                SmsOutboundMessage.scheduled_at,
+                SmsOutboundMessage.sent_at,
+                SmsOutboundMessage.delivered_at,
+                SmsOutboundMessage.created_at,
+                SmsOutboundMessage.created_by_staff_user_id,
+                func.coalesce(func.nullif(creator_label, ""), StaffUser.username).label("created_by_label"),
+            )
+            .select_from(SmsOutboundMessage)
+            .outerjoin(StaffUser, StaffUser.id == SmsOutboundMessage.created_by_staff_user_id)
+            .where(SmsOutboundMessage.subscriber_id == int(subscriber_id))
+            .order_by(SmsOutboundMessage.id.desc())
+            .limit(safe_limit)
+        )
+        rows = self.db.execute(stmt).all()
+        return [SubscriberSmsHistoryRow(**row._mapping) for row in rows]
 
     def get_summary(self) -> SmsQueueSummary:
         rows = self.db.execute(
@@ -278,28 +366,167 @@ class SmsQueueService:
             delivered=counts.get("delivered", 0),
         )
 
-    def dispatch_next(self, *, actor_staff_id: int) -> SmsOutboundMessage | None:
+    def release_expired_locks(self) -> int:
+        now = datetime.now(timezone.utc)
+        stmt = (
+            select(SmsOutboundMessage)
+            .where(SmsOutboundMessage.status == "processing")
+            .where(SmsOutboundMessage.lock_expires_at.is_not(None))
+            .where(SmsOutboundMessage.lock_expires_at <= now)
+        )
+        messages = list(self.db.execute(stmt).scalars().all())
+        count = 0
+        for message in messages:
+            message.status = "queued"
+            message.locked_at = None
+            message.lock_token = None
+            message.lock_expires_at = None
+            message.next_attempt_at = now
+            message.updated_at = now
+            count += 1
+        if count:
+            self.db.commit()
+        return count
+
+    def dispatch_due_batch(self, *, actor_staff_id: int | None, batch_size: int = 10) -> SmsDispatchBatchResult:
+        if batch_size < 1:
+            raise SmsQueueValidationError("batch_size musi być >= 1.")
         effective, _ = self.config_service.get_effective_settings()
         if not effective.enabled:
             raise SmsQueueValidationError("Integracja SMeSKom jest wyłączona. Najpierw aktywuj konfigurację SMS.")
 
+        self.release_expired_locks()
+        claimed = sent = delivered = failed = requeued = skipped = 0
+        for _ in range(batch_size):
+            message = self._claim_next_message()
+            if message is None:
+                break
+            claimed += 1
+            final = self._dispatch_claimed_message(message=message, effective=effective, actor_staff_id=actor_staff_id)
+            if final == "sent":
+                sent += 1
+            elif final == "delivered":
+                delivered += 1
+            elif final == "failed":
+                failed += 1
+            elif final == "queued":
+                requeued += 1
+            else:
+                skipped += 1
+        return SmsDispatchBatchResult(claimed=claimed, sent=sent, delivered=delivered, failed=failed, requeued=requeued, skipped=skipped)
+
+    def dispatch_next(self, *, actor_staff_id: int) -> SmsOutboundMessage | None:
+        effective, _ = self.config_service.get_effective_settings()
+        if not effective.enabled:
+            raise SmsQueueValidationError("Integracja SMeSKom jest wyłączona. Najpierw aktywuj konfigurację SMS.")
+        self.release_expired_locks()
+        message = self._claim_next_message()
+        if message is None:
+            return None
+        self._dispatch_claimed_message(message=message, effective=effective, actor_staff_id=actor_staff_id)
+        self.db.refresh(message)
+        return message
+
+    def process_delivery_reports(self, *, limit: int = 100, actor_staff_id: int | None = None) -> int:
+        safe_limit = max(1, min(int(limit), 500))
+        stmt = (
+            select(SmsWebhookEvent)
+            .where(SmsWebhookEvent.event_kind == "delivery_report")
+            .where(SmsWebhookEvent.status == "accepted")
+            .where(SmsWebhookEvent.processed_result.is_(None))
+            .order_by(SmsWebhookEvent.id.asc())
+            .limit(safe_limit)
+        )
+        events = list(self.db.execute(stmt).scalars().all())
+        processed = 0
+        for event in events:
+            if self._apply_delivery_report(event=event, actor_staff_id=actor_staff_id):
+                processed += 1
+        self.db.commit()
+        return processed
+
+    def _apply_delivery_report(self, *, event: SmsWebhookEvent, actor_staff_id: int | None) -> bool:
+        message = None
+        if event.provider_message_id:
+            message = self.db.execute(
+                select(SmsOutboundMessage)
+                .where(SmsOutboundMessage.provider == event.provider)
+                .where(SmsOutboundMessage.provider_message_id == event.provider_message_id)
+                .limit(1)
+            ).scalars().first()
         now = datetime.now(timezone.utc)
-        message = self.db.execute(
+        event.processed_at = now
+        event.linked_sms_message_id = int(message.id) if message is not None else None
+
+        if message is None:
+            event.processed_result = "message_not_found"
+            return False
+
+        before = self._message_public_dict(message)
+        provider_status = (event.provider_status or "").strip().lower()
+        message.provider_last_status = (event.provider_status or message.provider_last_status or "").strip() or None
+        message.delivered_by_webhook_event_id = int(event.id)
+        message.updated_at = now
+
+        if provider_status in DELIVERY_SUCCESS_STATUSES:
+            message.status = "delivered"
+            message.delivered_at = message.delivered_at or now
+            event.processed_result = "message_delivered"
+        elif provider_status in DELIVERY_FAILURE_STATUSES:
+            message.status = "failed"
+            message.last_error_at = now
+            message.last_error_message = f"Delivery report: {event.provider_status}"
+            event.processed_result = "message_failed_by_delivery_report"
+        else:
+            event.processed_result = f"ignored_status:{provider_status or 'empty'}"
+
+        self.config_service._audit(
+            actor_staff_id=actor_staff_id,
+            action="SMS_DELIVERY_REPORT_PROCESSED",
+            severity="info",
+            entity_type="sms_outbound_message",
+            entity_id=str(message.id),
+            before=before,
+            after=self._message_public_dict(message),
+            meta={
+                "provider": event.provider,
+                "event_id": int(event.id),
+                "provider_message_id": event.provider_message_id,
+                "provider_status": event.provider_status,
+            },
+        )
+        return True
+
+    def _claim_next_message(self) -> SmsOutboundMessage | None:
+        now = datetime.now(timezone.utc)
+        token = uuid.uuid4().hex
+        stmt = (
             select(SmsOutboundMessage)
             .where(SmsOutboundMessage.status == "queued")
             .where(SmsOutboundMessage.scheduled_at <= now)
-            .order_by(SmsOutboundMessage.id.asc())
+            .where(SmsOutboundMessage.next_attempt_at <= now)
+            .where(or_(SmsOutboundMessage.lock_expires_at.is_(None), SmsOutboundMessage.lock_expires_at < now))
+            .order_by(SmsOutboundMessage.next_attempt_at.asc(), SmsOutboundMessage.id.asc())
+            .with_for_update(skip_locked=True)
             .limit(1)
-        ).scalars().first()
+        )
+        message = self.db.execute(stmt).scalars().first()
         if message is None:
+            self.db.rollback()
             return None
 
-        before = self._message_public_dict(message)
         message.status = "processing"
         message.locked_at = now
+        message.lock_token = token
+        message.lock_expires_at = now + timedelta(seconds=LOCK_TTL_SECONDS)
         message.updated_at = now
-        self.db.flush()
+        self.db.commit()
+        self.db.refresh(message)
+        return message
 
+    def _dispatch_claimed_message(self, *, message: SmsOutboundMessage, effective: SmeskomConnectionSettings, actor_staff_id: int | None) -> str:
+        now = datetime.now(timezone.utc)
+        before = self._message_public_dict(message)
         attempt = SmsOutboundAttempt(
             sms_message_id=int(message.id),
             attempt_no=int(message.attempt_count) + 1,
@@ -314,33 +541,50 @@ class SmsQueueService:
         self.db.flush()
 
         client = SmeskomClient(effective)
+        final_status = "queued"
         try:
             result = client.send_sms(to=message.recipient_phone, message=message.body, sender=message.sender_name)
-            final_status = "sent" if result.ok else "failed"
-            message.status = final_status
-            message.sent_at = now if result.ok else None
+            provider_status = (result.provider_status or "sent").strip().lower()
+            message.status = "delivered" if provider_status in DELIVERY_SUCCESS_STATUSES else "sent"
+            message.sent_at = now
+            if message.status == "delivered":
+                message.delivered_at = now
             message.locked_at = None
-            message.last_error_at = None if result.ok else now
+            message.lock_token = None
+            message.lock_expires_at = None
+            message.last_error_at = None
+            message.last_error_message = None
             message.attempt_count = int(message.attempt_count) + 1
             message.provider_message_id = result.provider_message_id
-            message.provider_last_status = final_status
-            message.provider_response_excerpt = result.response_excerpt
+            message.provider_last_status = result.provider_status or message.status
+            message.provider_response_excerpt = self._clip(result.response_excerpt)
             message.updated_at = now
+            message.next_attempt_at = now
 
-            attempt.status = final_status
+            attempt.status = message.status
             attempt.provider_http_status = result.http_status
             attempt.provider_message_id = result.provider_message_id
-            attempt.provider_status = final_status
-            attempt.response_excerpt = result.response_excerpt
+            attempt.provider_status = result.provider_status or message.status
+            attempt.response_excerpt = self._clip(result.response_excerpt)
             attempt.finished_at = now
+            final_status = message.status
         except SmeskomApiError as exc:
             message.attempt_count = int(message.attempt_count) + 1
             message.locked_at = None
+            message.lock_token = None
+            message.lock_expires_at = None
             message.last_error_at = now
+            message.last_error_message = str(exc)
             message.provider_last_status = "failed"
-            message.provider_response_excerpt = str(exc)
+            message.provider_response_excerpt = self._clip(str(exc))
             message.updated_at = now
-            message.status = "failed" if int(message.attempt_count) >= int(message.max_attempts) else "queued"
+            if int(message.attempt_count) >= int(message.max_attempts):
+                message.status = "failed"
+                final_status = "failed"
+            else:
+                message.status = "queued"
+                message.next_attempt_at = now + timedelta(seconds=self._compute_backoff_seconds(int(message.attempt_count)))
+                final_status = "queued"
 
             attempt.status = "failed"
             attempt.error_message = str(exc)
@@ -356,11 +600,15 @@ class SmsQueueService:
             entity_id=str(message.id),
             before=before,
             after=self._message_public_dict(message),
-            meta={"provider": "smeskom", "attempt_count": int(message.attempt_count)},
+            meta={
+                "provider": "smeskom",
+                "attempt_count": int(message.attempt_count),
+                "final_status": final_status,
+            },
         )
         self.db.commit()
         self.db.refresh(message)
-        return message
+        return final_status
 
     def _get_existing_by_idempotency(self, idempotency_key: str | None) -> SmsOutboundMessage | None:
         if not idempotency_key:
@@ -378,6 +626,8 @@ class SmsQueueService:
         queue_key = str(payload.get("queue_key") or "default").strip() or "default"
         idempotency_key_raw = payload.get("idempotency_key")
         idempotency_key = str(idempotency_key_raw).strip() if idempotency_key_raw is not None else None
+        subscriber_id_raw = payload.get("subscriber_id")
+        subscriber_id = int(subscriber_id_raw) if subscriber_id_raw not in (None, "") else None
         max_attempts = int(payload.get("max_attempts") or 3)
         meta = payload.get("meta") or {}
         scheduled_at_value = payload.get("scheduled_at")
@@ -411,10 +661,17 @@ class SmsQueueService:
             "sender_name": sender_name,
             "queue_key": queue_key,
             "idempotency_key": idempotency_key,
+            "subscriber_id": subscriber_id,
             "max_attempts": max_attempts,
             "scheduled_at": scheduled_at,
             "meta": meta,
         }
+
+    @staticmethod
+    def _compute_backoff_seconds(attempt_count: int) -> int:
+        schedule = [30, 120, 300, 900, 1800, 3600]
+        idx = max(0, min(int(attempt_count) - 1, len(schedule) - 1))
+        return schedule[idx]
 
     @staticmethod
     def _build_body_preview(body: str, limit: int = 160) -> str:
@@ -424,12 +681,20 @@ class SmsQueueService:
         return clean[: limit - 1] + "…"
 
     @staticmethod
+    def _clip(value: str | None, limit: int = MAX_RESPONSE_EXCERPT) -> str | None:
+        if value is None:
+            return None
+        raw = str(value)
+        return raw if len(raw) <= limit else raw[: limit - 1] + "…"
+
+    @staticmethod
     def _message_public_dict(message: SmsOutboundMessage) -> dict[str, Any]:
         return {
             "id": int(message.id),
             "provider": message.provider,
             "status": message.status,
             "queue_key": message.queue_key,
+            "subscriber_id": int(message.subscriber_id) if message.subscriber_id is not None else None,
             "recipient_phone": message.recipient_phone,
             "sender_name": message.sender_name,
             "body_preview": message.body_preview,
@@ -438,7 +703,9 @@ class SmsQueueService:
             "provider_message_id": message.provider_message_id,
             "provider_last_status": message.provider_last_status,
             "scheduled_at": message.scheduled_at.isoformat() if message.scheduled_at else None,
+            "next_attempt_at": message.next_attempt_at.isoformat() if message.next_attempt_at else None,
             "sent_at": message.sent_at.isoformat() if message.sent_at else None,
+            "delivered_at": message.delivered_at.isoformat() if message.delivered_at else None,
             "created_at": message.created_at.isoformat() if message.created_at else None,
         }
 
