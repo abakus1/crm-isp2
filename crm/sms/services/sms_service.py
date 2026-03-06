@@ -1,15 +1,22 @@
 from __future__ import annotations
 
 import json
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any
 
 from fastapi import Request
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from crm.adapters.sms import SmeskomConnectionSettings
+from crm.adapters.sms import SmeskomApiError, SmeskomClient, SmeskomConnectionSettings
 from crm.app.config import get_settings
-from crm.db.models.sms import SmsSmeskomConfig, SmsWebhookEvent
+from crm.db.models.sms import (
+    SmsOutboundAttempt,
+    SmsOutboundMessage,
+    SmsSmeskomConfig,
+    SmsWebhookEvent,
+)
 from crm.db.models.staff import AuditLog
 from crm.shared.request_context import get_request_context
 
@@ -18,8 +25,23 @@ class SmsConfigValidationError(ValueError):
     pass
 
 
+class SmsQueueValidationError(ValueError):
+    pass
+
+
 ALLOWED_AUTH_MODES = {"basic", "body"}
 ALLOWED_INBOUND_MODES = {"callback", "polling"}
+ALLOWED_QUEUE_STATUSES = {"queued", "processing", "sent", "failed", "cancelled", "delivered"}
+
+
+@dataclass(frozen=True)
+class SmsQueueSummary:
+    queued: int
+    processing: int
+    sent: int
+    failed: int
+    cancelled: int
+    delivered: int
 
 
 class SmsConfigService:
@@ -86,28 +108,10 @@ class SmsConfigService:
         row.updated_by_staff_user_id = int(actor_staff_id)
 
         self.db.flush()
-        self._audit_config_change(actor_staff_id=actor_staff_id, before=before, after=self._row_public_dict(row))
+        self._audit(actor_staff_id=actor_staff_id, action="SMS_CONFIG_UPDATE", severity="critical", entity_type="sms_smeskom_config", entity_id="1", before=before, after=self._row_public_dict(row), meta={"provider": "smeskom"})
         self.db.commit()
         self.db.refresh(row)
         return row
-
-    def _audit_config_change(self, *, actor_staff_id: int, before: dict | None, after: dict) -> None:
-        ctx = get_request_context()
-        self.db.add(
-            AuditLog(
-                staff_user_id=int(actor_staff_id),
-                severity="critical",
-                action="SMS_CONFIG_UPDATE",
-                entity_type="sms_smeskom_config",
-                entity_id="1",
-                request_id=ctx.request_id,
-                ip=ctx.ip,
-                user_agent=ctx.user_agent,
-                before=before,
-                after=after,
-                meta={"provider": "smeskom"},
-            )
-        )
 
     def _normalize_payload(self, payload: dict[str, Any]) -> dict[str, Any]:
         auth_mode = str(payload.get("auth_mode") or "basic").strip().lower()
@@ -188,6 +192,256 @@ class SmsConfigService:
             "receive_poll_interval_seconds": int(row.receive_poll_interval_seconds),
         }
 
+    def _audit(self, *, actor_staff_id: int | None, action: str, severity: str, entity_type: str | None, entity_id: str | None, before: dict | None, after: dict | None, meta: dict[str, Any] | None) -> None:
+        ctx = get_request_context()
+        self.db.add(
+            AuditLog(
+                staff_user_id=int(actor_staff_id) if actor_staff_id is not None else None,
+                severity=severity,
+                action=action,
+                entity_type=entity_type,
+                entity_id=entity_id,
+                request_id=ctx.request_id,
+                ip=ctx.ip,
+                user_agent=ctx.user_agent,
+                before=before,
+                after=after,
+                meta=meta,
+            )
+        )
+
+
+class SmsQueueService:
+    def __init__(self, db: Session):
+        self.db = db
+        self.config_service = SmsConfigService(db)
+
+    def enqueue_message(self, payload: dict[str, Any], *, actor_staff_id: int) -> SmsOutboundMessage:
+        normalized = self._normalize_enqueue_payload(payload)
+        existing = self._get_existing_by_idempotency(normalized["idempotency_key"])
+        if existing is not None:
+            return existing
+
+        message = SmsOutboundMessage(
+            provider="smeskom",
+            status="queued",
+            direction="outbound",
+            queue_key=normalized["queue_key"],
+            idempotency_key=normalized["idempotency_key"],
+            recipient_phone=normalized["recipient_phone"],
+            sender_name=normalized["sender_name"],
+            body=normalized["body"],
+            body_preview=self._build_body_preview(normalized["body"]),
+            scheduled_at=normalized["scheduled_at"],
+            max_attempts=normalized["max_attempts"],
+            meta=normalized["meta"],
+            created_by_staff_user_id=int(actor_staff_id),
+            updated_at=datetime.now(timezone.utc),
+        )
+        self.db.add(message)
+        self.db.flush()
+        self.config_service._audit(
+            actor_staff_id=actor_staff_id,
+            action="SMS_QUEUE_ENQUEUE",
+            severity="info",
+            entity_type="sms_outbound_message",
+            entity_id=str(message.id),
+            before=None,
+            after=self._message_public_dict(message),
+            meta={"provider": "smeskom", "queue_key": normalized["queue_key"]},
+        )
+        self.db.commit()
+        self.db.refresh(message)
+        return message
+
+    def list_messages(self, *, limit: int = 50, status: str | None = None) -> list[SmsOutboundMessage]:
+        safe_limit = max(1, min(int(limit), 200))
+        stmt = select(SmsOutboundMessage).order_by(SmsOutboundMessage.id.desc()).limit(safe_limit)
+        if status:
+            normalized_status = str(status).strip().lower()
+            if normalized_status not in ALLOWED_QUEUE_STATUSES:
+                raise SmsQueueValidationError("Nieobsługiwany status kolejki SMS.")
+            stmt = select(SmsOutboundMessage).where(SmsOutboundMessage.status == normalized_status).order_by(SmsOutboundMessage.id.desc()).limit(safe_limit)
+        return list(self.db.execute(stmt).scalars().all())
+
+    def get_summary(self) -> SmsQueueSummary:
+        rows = self.db.execute(
+            select(SmsOutboundMessage.status, func.count(SmsOutboundMessage.id)).group_by(SmsOutboundMessage.status)
+        ).all()
+        counts = {status: int(count) for status, count in rows}
+        return SmsQueueSummary(
+            queued=counts.get("queued", 0),
+            processing=counts.get("processing", 0),
+            sent=counts.get("sent", 0),
+            failed=counts.get("failed", 0),
+            cancelled=counts.get("cancelled", 0),
+            delivered=counts.get("delivered", 0),
+        )
+
+    def dispatch_next(self, *, actor_staff_id: int) -> SmsOutboundMessage | None:
+        effective, _ = self.config_service.get_effective_settings()
+        if not effective.enabled:
+            raise SmsQueueValidationError("Integracja SMeSKom jest wyłączona. Najpierw aktywuj konfigurację SMS.")
+
+        now = datetime.now(timezone.utc)
+        message = self.db.execute(
+            select(SmsOutboundMessage)
+            .where(SmsOutboundMessage.status == "queued")
+            .where(SmsOutboundMessage.scheduled_at <= now)
+            .order_by(SmsOutboundMessage.id.asc())
+            .limit(1)
+        ).scalars().first()
+        if message is None:
+            return None
+
+        before = self._message_public_dict(message)
+        message.status = "processing"
+        message.locked_at = now
+        message.updated_at = now
+        self.db.flush()
+
+        attempt = SmsOutboundAttempt(
+            sms_message_id=int(message.id),
+            attempt_no=int(message.attempt_count) + 1,
+            status="processing",
+            request_payload={
+                "recipient_phone": message.recipient_phone,
+                "sender_name": message.sender_name,
+                "body": message.body,
+            },
+        )
+        self.db.add(attempt)
+        self.db.flush()
+
+        client = SmeskomClient(effective)
+        try:
+            result = client.send_sms(to=message.recipient_phone, message=message.body, sender=message.sender_name)
+            final_status = "sent" if result.ok else "failed"
+            message.status = final_status
+            message.sent_at = now if result.ok else None
+            message.locked_at = None
+            message.last_error_at = None if result.ok else now
+            message.attempt_count = int(message.attempt_count) + 1
+            message.provider_message_id = result.provider_message_id
+            message.provider_last_status = final_status
+            message.provider_response_excerpt = result.response_excerpt
+            message.updated_at = now
+
+            attempt.status = final_status
+            attempt.provider_http_status = result.http_status
+            attempt.provider_message_id = result.provider_message_id
+            attempt.provider_status = final_status
+            attempt.response_excerpt = result.response_excerpt
+            attempt.finished_at = now
+        except SmeskomApiError as exc:
+            message.attempt_count = int(message.attempt_count) + 1
+            message.locked_at = None
+            message.last_error_at = now
+            message.provider_last_status = "failed"
+            message.provider_response_excerpt = str(exc)
+            message.updated_at = now
+            message.status = "failed" if int(message.attempt_count) >= int(message.max_attempts) else "queued"
+
+            attempt.status = "failed"
+            attempt.error_message = str(exc)
+            attempt.finished_at = now
+        finally:
+            self.db.flush()
+
+        self.config_service._audit(
+            actor_staff_id=actor_staff_id,
+            action="SMS_QUEUE_DISPATCH_NEXT",
+            severity="info",
+            entity_type="sms_outbound_message",
+            entity_id=str(message.id),
+            before=before,
+            after=self._message_public_dict(message),
+            meta={"provider": "smeskom", "attempt_count": int(message.attempt_count)},
+        )
+        self.db.commit()
+        self.db.refresh(message)
+        return message
+
+    def _get_existing_by_idempotency(self, idempotency_key: str | None) -> SmsOutboundMessage | None:
+        if not idempotency_key:
+            return None
+        return self.db.execute(
+            select(SmsOutboundMessage).where(SmsOutboundMessage.idempotency_key == idempotency_key)
+        ).scalars().first()
+
+    def _normalize_enqueue_payload(self, payload: dict[str, Any]) -> dict[str, Any]:
+        recipient_phone = str(payload.get("recipient_phone") or "").strip()
+        body = str(payload.get("body") or "").strip()
+        sender_name_raw = payload.get("sender_name")
+        sender_name = str(sender_name_raw).strip() if sender_name_raw is not None else None
+        sender_name = sender_name or None
+        queue_key = str(payload.get("queue_key") or "default").strip() or "default"
+        idempotency_key_raw = payload.get("idempotency_key")
+        idempotency_key = str(idempotency_key_raw).strip() if idempotency_key_raw is not None else None
+        max_attempts = int(payload.get("max_attempts") or 3)
+        meta = payload.get("meta") or {}
+        scheduled_at_value = payload.get("scheduled_at")
+
+        if not recipient_phone:
+            raise SmsQueueValidationError("Numer odbiorcy jest wymagany.")
+        if not body:
+            raise SmsQueueValidationError("Treść SMS jest wymagana.")
+        if len(body) > 2000:
+            raise SmsQueueValidationError("Treść SMS jest zbyt długa dla kolejki foundation (max 2000 znaków).")
+        if max_attempts < 1 or max_attempts > 10:
+            raise SmsQueueValidationError("max_attempts musi być w zakresie 1-10.")
+        if not isinstance(meta, dict):
+            raise SmsQueueValidationError("Pole meta musi być obiektem JSON.")
+
+        if scheduled_at_value:
+            if isinstance(scheduled_at_value, str):
+                scheduled_at = datetime.fromisoformat(scheduled_at_value.replace("Z", "+00:00"))
+            elif isinstance(scheduled_at_value, datetime):
+                scheduled_at = scheduled_at_value
+            else:
+                raise SmsQueueValidationError("Nieobsługiwany format scheduled_at.")
+            if scheduled_at.tzinfo is None:
+                scheduled_at = scheduled_at.replace(tzinfo=timezone.utc)
+        else:
+            scheduled_at = datetime.now(timezone.utc)
+
+        return {
+            "recipient_phone": recipient_phone,
+            "body": body,
+            "sender_name": sender_name,
+            "queue_key": queue_key,
+            "idempotency_key": idempotency_key,
+            "max_attempts": max_attempts,
+            "scheduled_at": scheduled_at,
+            "meta": meta,
+        }
+
+    @staticmethod
+    def _build_body_preview(body: str, limit: int = 160) -> str:
+        clean = " ".join(str(body).split())
+        if len(clean) <= limit:
+            return clean
+        return clean[: limit - 1] + "…"
+
+    @staticmethod
+    def _message_public_dict(message: SmsOutboundMessage) -> dict[str, Any]:
+        return {
+            "id": int(message.id),
+            "provider": message.provider,
+            "status": message.status,
+            "queue_key": message.queue_key,
+            "recipient_phone": message.recipient_phone,
+            "sender_name": message.sender_name,
+            "body_preview": message.body_preview,
+            "attempt_count": int(message.attempt_count),
+            "max_attempts": int(message.max_attempts),
+            "provider_message_id": message.provider_message_id,
+            "provider_last_status": message.provider_last_status,
+            "scheduled_at": message.scheduled_at.isoformat() if message.scheduled_at else None,
+            "sent_at": message.sent_at.isoformat() if message.sent_at else None,
+            "created_at": message.created_at.isoformat() if message.created_at else None,
+        }
+
 
 class SmeskomWebhookService:
     def __init__(self, db: Session):
@@ -265,40 +519,67 @@ class SmeskomWebhookService:
         if not raw_body.strip():
             return {}
         try:
-            data = json.loads(raw_body)
+            payload = json.loads(raw_body)
+            return payload if isinstance(payload, dict) else {"_raw": payload}
         except Exception:
             return {}
-        return data if isinstance(data, dict) else {"_value": data}
 
     @staticmethod
-    def _pick_first(*sources: dict[str, Any], names: list[str]) -> str | None:
-        lowered = {name.lower() for name in names}
-        for source in sources:
-            for key, value in source.items():
-                if str(key).lower() in lowered and value not in (None, ""):
-                    return str(value)
-        return None
-
-    def _secret_ok(self, secret: str, headers: dict[str, Any], query_params: dict[str, Any], form_data: dict[str, Any], json_data: dict[str, Any]) -> bool:
+    def _secret_ok(secret: str, headers: dict[str, Any], query_params: dict[str, Any], form_data: dict[str, Any], json_data: dict[str, Any]) -> bool:
         expected = (secret or "").strip()
         if not expected:
-            return True
-        candidate = self._pick_first(
-            headers,
-            query_params,
-            form_data,
-            json_data,
-            names=["x-smeskom-secret", "x-webhook-secret", "x-callback-secret", "secret", "token", "callback_secret"],
-        )
-        return bool(candidate and candidate == expected)
+            return False
+        candidates = [
+            headers.get("x-callback-secret"),
+            headers.get("x-webhook-secret"),
+            query_params.get("secret"),
+            query_params.get("token"),
+            form_data.get("secret"),
+            form_data.get("token"),
+            json_data.get("secret"),
+            json_data.get("token"),
+        ]
+        for candidate in candidates:
+            if candidate is None:
+                continue
+            if str(candidate).strip() == expected:
+                return True
+        return False
 
     @staticmethod
     def _detect_event_kind(query_params: dict[str, Any], form_data: dict[str, Any], json_data: dict[str, Any]) -> str:
-        text = " ".join(
-            str(v) for src in (query_params, form_data, json_data) for v in [json.dumps(src, ensure_ascii=False)] if src
-        ).lower()
-        if any(marker in text for marker in ["delivery", "delivered", "doręcz", "status"]):
-            return "delivery_status"
-        if any(marker in text for marker in ["inbound", "odebran", "incoming", "wiadomosc", "message"]):
+        payloads = [query_params, form_data, json_data]
+        for payload in payloads:
+            kind = SmeskomWebhookService._pick_first(payload, {}, {}, ["event", "event_kind", "type", "kind"])
+            if kind:
+                normalized = str(kind).strip().lower()
+                if normalized in {"delivery", "delivery_report", "dlr"}:
+                    return "delivery_report"
+                if normalized in {"inbound", "mo", "received_sms"}:
+                    return "inbound_sms"
+                return normalized[:32]
+        if SmeskomWebhookService._pick_first(query_params, form_data, json_data, ["status", "delivery_status"]):
+            return "delivery_report"
+        if SmeskomWebhookService._pick_first(query_params, form_data, json_data, ["message", "text", "body"]):
             return "inbound_sms"
         return "unknown"
+
+    @staticmethod
+    def _pick_first(query_params: dict[str, Any], form_data: dict[str, Any], json_data: dict[str, Any], keys: list[str]) -> str | None:
+        for payload in [query_params, form_data, json_data]:
+            if not isinstance(payload, dict):
+                continue
+            for key in keys:
+                value = payload.get(key)
+                if value is None:
+                    continue
+                if isinstance(value, list):
+                    for item in value:
+                        normalized = str(item).strip()
+                        if normalized:
+                            return normalized
+                    continue
+                normalized = str(value).strip()
+                if normalized:
+                    return normalized
+        return None

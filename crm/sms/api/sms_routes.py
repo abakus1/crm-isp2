@@ -1,8 +1,9 @@
 from __future__ import annotations
 
+from datetime import datetime
 from typing import Any, Literal
 
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
@@ -13,7 +14,13 @@ from crm.adapters.sms import SmeskomApiError, SmeskomClient, SmeskomConnectionSe
 from crm.users.identity.jwt_deps import get_current_user
 from crm.users.identity.rbac.actions import Action
 from crm.users.identity.rbac.dependencies import require
-from crm.sms.services import SmsConfigService, SmsConfigValidationError, SmeskomWebhookService
+from crm.sms.services import (
+    SmsConfigService,
+    SmsConfigValidationError,
+    SmsQueueService,
+    SmsQueueValidationError,
+    SmeskomWebhookService,
+)
 
 router = APIRouter(prefix="/sms", tags=["sms"])
 
@@ -68,6 +75,43 @@ class SmeskomTestOut(BaseModel):
     http_status: int | None
     provider_message: str
     response_excerpt: str | None = None
+
+
+class SmsQueueMessageIn(BaseModel):
+    recipient_phone: str = Field(min_length=3, max_length=64)
+    body: str = Field(min_length=1, max_length=2000)
+    sender_name: str | None = Field(default=None, max_length=32)
+    queue_key: str = Field(default="default", min_length=1, max_length=64)
+    idempotency_key: str | None = Field(default=None, max_length=128)
+    scheduled_at: datetime | None = None
+    max_attempts: int = Field(default=3, ge=1, le=10)
+    meta: dict[str, Any] = Field(default_factory=dict)
+
+
+class SmsQueueMessageOut(BaseModel):
+    id: int
+    provider: str
+    status: str
+    queue_key: str
+    recipient_phone: str
+    sender_name: str | None
+    body_preview: str
+    attempt_count: int
+    max_attempts: int
+    provider_message_id: str | None
+    provider_last_status: str | None
+    scheduled_at: datetime
+    sent_at: datetime | None
+    created_at: datetime
+
+
+class SmsQueueSummaryOut(BaseModel):
+    queued: int
+    processing: int
+    sent: int
+    failed: int
+    cancelled: int
+    delivered: int
 
 
 class SmeskomWebhookOut(BaseModel):
@@ -140,6 +184,77 @@ def smeskom_save_config(
         payload["persistence_mode"] = persistence_mode
         return SmeskomStateOut(**payload)
     except SmsConfigValidationError as exc:
+        db.rollback()
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.get(
+    "/queue/summary",
+    response_model=SmsQueueSummaryOut,
+    dependencies=[Depends(require(Action.SMS_QUEUE_READ))],
+)
+def sms_queue_summary(
+    db: Session = Depends(get_db),
+    _me: StaffUser = Depends(get_current_user),
+):
+    service = SmsQueueService(db)
+    return SmsQueueSummaryOut(**service.get_summary().__dict__)
+
+
+@router.get(
+    "/queue/messages",
+    response_model=list[SmsQueueMessageOut],
+    dependencies=[Depends(require(Action.SMS_QUEUE_READ))],
+)
+def sms_queue_list(
+    limit: int = Query(default=50, ge=1, le=200),
+    status: str | None = Query(default=None),
+    db: Session = Depends(get_db),
+    _me: StaffUser = Depends(get_current_user),
+):
+    service = SmsQueueService(db)
+    try:
+        items = service.list_messages(limit=limit, status=status)
+    except SmsQueueValidationError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return [SmsQueueMessageOut.model_validate(item, from_attributes=True) for item in items]
+
+
+@router.post(
+    "/queue/messages",
+    response_model=SmsQueueMessageOut,
+    dependencies=[Depends(require(Action.SMS_QUEUE_WRITE))],
+)
+def sms_queue_enqueue(
+    body: SmsQueueMessageIn,
+    db: Session = Depends(get_db),
+    me: StaffUser = Depends(get_current_user),
+):
+    service = SmsQueueService(db)
+    try:
+        item = service.enqueue_message(body.model_dump(mode="json"), actor_staff_id=int(me.id))
+        return SmsQueueMessageOut.model_validate(item, from_attributes=True)
+    except SmsQueueValidationError as exc:
+        db.rollback()
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.post(
+    "/queue/dispatch-next",
+    response_model=SmsQueueMessageOut | None,
+    dependencies=[Depends(require(Action.SMS_QUEUE_WRITE))],
+)
+def sms_queue_dispatch_next(
+    db: Session = Depends(get_db),
+    me: StaffUser = Depends(get_current_user),
+):
+    service = SmsQueueService(db)
+    try:
+        item = service.dispatch_next(actor_staff_id=int(me.id))
+        if item is None:
+            return None
+        return SmsQueueMessageOut.model_validate(item, from_attributes=True)
+    except SmsQueueValidationError as exc:
         db.rollback()
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 

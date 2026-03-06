@@ -1,7 +1,17 @@
-from .sms_service import SmsConfigService, SmsConfigValidationError, SmeskomWebhookService
+from .sms_service import (
+    SmsConfigService,
+    SmsConfigValidationError,
+    SmsQueueService,
+    SmsQueueSummary,
+    SmsQueueValidationError,
+    SmeskomWebhookService,
+)
 
 __all__ = [
     "SmsConfigService",
     "SmsConfigValidationError",
+    "SmsQueueService",
+    "SmsQueueSummary",
+    "SmsQueueValidationError",
     "SmeskomWebhookService",
 ]
