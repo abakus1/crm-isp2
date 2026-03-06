@@ -67,6 +67,8 @@ class Action(str, Enum):
     # SMS / notifications config
     SMS_CONFIG_READ = "sms.config.read"
     SMS_CONFIG_WRITE = "sms.config.write"
+    SMS_QUEUE_READ = "sms.queue.read"
+    SMS_QUEUE_WRITE = "sms.queue.write"
 
     # Catalog / pricing config
     CATALOG_PRODUCTS_READ = "catalog.products.read"
