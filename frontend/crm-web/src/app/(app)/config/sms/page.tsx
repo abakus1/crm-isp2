@@ -21,7 +21,7 @@ type SmeskomState = {
   receive_mark_as_read: boolean;
   receive_poll_interval_seconds: number;
   provider_name: string;
-  persistence_mode: "env" | string;
+  persistence_mode: "env" | "db" | "db+env-fallback" | string;
 };
 
 type TestResponse = {
@@ -167,6 +167,45 @@ export default function SmsConfigPage() {
     setForm((prev) => ({ ...prev, [key]: value }));
   }
 
+  async function saveConfig() {
+    if (!token || !canWrite) return;
+    setBusy(true);
+    setError(null);
+    setInfo(null);
+
+    try {
+      const res = await apiFetch<SmeskomState>("/sms/config/smeskom", {
+        method: "PUT",
+        token,
+        onUnauthorized: () => logout(),
+        body: {
+          enabled: form.enabled,
+          primary_base_url: form.primary_base_url,
+          secondary_base_url: form.secondary_base_url,
+          auth_mode: form.auth_mode,
+          login: form.login,
+          password: form.password || null,
+          timeout_seconds: Number(form.timeout_seconds || 10),
+          callback_enabled: form.callback_enabled,
+          callback_url: form.callback_url,
+          callback_secret: form.callback_secret || null,
+          inbound_mode: form.inbound_mode,
+          receive_mark_as_read: form.receive_mark_as_read,
+          receive_poll_interval_seconds: Number(form.receive_poll_interval_seconds || 60),
+        },
+      });
+
+      setServerState(res);
+      setForm((prev) => ({ ...prev, password: "", callback_secret: "" }));
+      setInfo("Konfiguracja SMeSKom została zapisana do bazy. Terminal może iść na krótkie L4.");
+    } catch (e) {
+      const ae = e as ApiError;
+      setError(ae?.message || "Nie udało się zapisać konfiguracji SMS.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
   async function runConnectionTest() {
     if (!token || !canWrite) return;
     setBusy(true);
@@ -216,8 +255,8 @@ export default function SmsConfigPage() {
         <div>
           <div className="text-sm font-semibold">Konfiguracja → SMS → SMeSKom</div>
           <div className="text-xs text-muted-foreground mt-1 max-w-3xl">
-            Pierwsza warstwa integracji: UI + backend adapter do testu połączenia. Aktualnie źródłem konfiguracji jest ENV,
-            więc panel pokazuje stan efektywny i pozwala testować połączenie na żywo bez zapisu do bazy.
+            Pierwsza sensowna wersja integracji: UI + backend adapter + zapis konfiguracji do DB + webhook callback.
+            Panel pokazuje teraz stan efektywny, pozwala testować połączenie na żywo i zapisywać ustawienia bez klepania ENV jak mnich w terminalu.
           </div>
         </div>
         <div className="rounded-lg border px-3 py-2 text-xs bg-muted/30">
@@ -287,7 +326,7 @@ export default function SmsConfigPage() {
 
               <Field
                 label="Hasło API"
-                helper={serverState?.has_password ? "Hasło jest już ustawione po stronie ENV. Żeby przetestować aktualny formularz, wpisz je tutaj ręcznie." : undefined}
+                helper={serverState?.has_password ? "Hasło jest już zapisane po stronie backendu. Żeby przetestować aktualny formularz, wpisz je tutaj ręcznie." : undefined}
               >
                 <input
                   type="password"
@@ -313,11 +352,19 @@ export default function SmsConfigPage() {
             <div className="flex flex-wrap gap-2">
               <button
                 type="button"
+                onClick={saveConfig}
+                disabled={busy || !canWrite || !form.login}
+                className="rounded-md border px-3 py-2 text-sm hover:bg-muted/40 disabled:opacity-50"
+              >
+                {busy ? "Praca w toku…" : "Zapisz konfigurację"}
+              </button>
+              <button
+                type="button"
                 onClick={runConnectionTest}
                 disabled={busy || !canWrite || !form.login || !form.password}
                 className="rounded-md border px-3 py-2 text-sm hover:bg-muted/40 disabled:opacity-50"
               >
-                {busy ? "Testowanie…" : "Test połączenia"}
+                {busy ? "Praca w toku…" : "Test połączenia"}
               </button>
               <div className="rounded-md border px-3 py-2 text-xs bg-muted/20">
                 Aktualny effective host: <span className="font-medium">{serverState?.primary_base_url ?? DEFAULT_FORM.primary_base_url}</span>
@@ -361,7 +408,7 @@ export default function SmsConfigPage() {
                 />
               </Field>
 
-              <Field label="Sekret callbacka" helper={serverState?.has_callback_secret ? "Sekret jest ustawiony po stronie ENV." : undefined}>
+              <Field label="Sekret callbacka" helper={serverState?.has_callback_secret ? "Sekret callbacka jest już zapisany po stronie backendu." : undefined}>
                 <input
                   type="password"
                   className="w-full rounded-md border bg-background px-3 py-2 text-sm"
@@ -397,14 +444,14 @@ export default function SmsConfigPage() {
         </div>
 
         <div className="space-y-4">
-          <Section title="Stan efektywny" desc="To, co backend aktualnie widzi po wczytaniu ENV.">
+          <Section title="Stan efektywny" desc="To, co backend aktualnie widzi po złożeniu DB + fallbacków z ENV, gdy czegoś nie zapisano w DB.">
             <div className="space-y-2 text-sm">
               <div className="flex items-center justify-between gap-3"><span>Provider</span><span className="font-medium">{serverState?.provider_name ?? "SMeSKom"}</span></div>
               <div className="flex items-center justify-between gap-3"><span>Integracja</span><span className="font-medium">{form.enabled ? "aktywna" : "wyłączona"}</span></div>
               <div className="flex items-center justify-between gap-3"><span>Auth</span><span className="font-medium">{form.auth_mode}</span></div>
               <div className="flex items-center justify-between gap-3"><span>Inbound</span><span className="font-medium">{effectiveReceiveModeLabel}</span></div>
-              <div className="flex items-center justify-between gap-3"><span>Hasło w ENV</span><span className="font-medium">{serverState?.has_password ? "tak" : "nie"}</span></div>
-              <div className="flex items-center justify-between gap-3"><span>Sekret callbacka w ENV</span><span className="font-medium">{serverState?.has_callback_secret ? "tak" : "nie"}</span></div>
+              <div className="flex items-center justify-between gap-3"><span>Hasło dostępne</span><span className="font-medium">{serverState?.has_password ? "tak" : "nie"}</span></div>
+              <div className="flex items-center justify-between gap-3"><span>Sekret callbacka dostępny</span><span className="font-medium">{serverState?.has_callback_secret ? "tak" : "nie"}</span></div>
             </div>
           </Section>
 
@@ -433,8 +480,9 @@ export default function SmsConfigPage() {
             <ul className="list-disc ml-5 text-sm text-muted-foreground space-y-1">
               <li>Jest adapter backendowy do SMeSKom i endpoint testu połączenia.</li>
               <li>Jest ekran konfiguracji w panelu admina.</li>
-              <li>Konfiguracja jest na razie env-backed, bez zapisu do DB.</li>
-              <li>Następny logiczny krok: persystencja ustawień + webhook callback + kolejka outbound SMS.</li>
+              <li>Jest zapis konfiguracji do DB z fallbackiem do ENV dla sekretów, jeśli trzeba.</li>
+              <li>Jest webhook callback, który przyjmuje request i zapisuje surowe zdarzenie do DB.</li>
+              <li>Nie ma jeszcze kolejki outbound/inbound SMS ani właściwego procesora zdarzeń.</li>
             </ul>
           </Section>
         </div>

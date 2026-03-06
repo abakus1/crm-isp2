@@ -25,6 +25,7 @@ settings = get_settings()
 PUBLIC_PATHS = {
     "/health",
     "/identity/login",
+    "/sms/hooks/smeskom",
 }
 
 # Swagger w produkcji najlepiej wyłączyć / trzymać za VPN
@@ -140,7 +141,7 @@ def create_app() -> FastAPI:
     async def bootstrap_lock_mw(request: Request, call_next):
         path = request.url.path or "/"
 
-        if path.startswith("/identity") or path == "/health":
+        if path.startswith("/identity") or path == "/health" or path == "/sms/hooks/smeskom":
             return await call_next(request)
 
         auth = request.headers.get("authorization", "")
