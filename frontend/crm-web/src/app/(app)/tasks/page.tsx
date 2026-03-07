@@ -1,7 +1,8 @@
 "use client";
 
 import Link from "next/link";
-import { useMemo, useState } from "react";
+import { useSearchParams } from "next/navigation";
+import { useEffect, useMemo, useState } from "react";
 
 import { seedSubscribers } from "@/lib/mockSubscribers";
 import {
@@ -25,6 +26,8 @@ import {
 } from "@/lib/mockTasks";
 
 type AssignmentMode = "staff" | "team";
+
+type TaskContextMode = "general" | "subscriber_prefill";
 
 type TaskFormState = {
   kind: TaskKind;
@@ -151,9 +154,9 @@ function TextInput(props: React.InputHTMLAttributes<HTMLInputElement>) {
   return <input {...props} className={["w-full rounded-md border bg-background px-3 py-2 text-sm", props.className || ""].join(" ")} />;
 }
 
-function getInitialForm(subscriberId: string, selfStaffId: string): TaskFormState {
+function getInitialForm(subscriberId: string, selfStaffId: string, mode: TaskContextMode = "general"): TaskFormState {
   return {
-    kind: "internal",
+    kind: mode === "subscriber_prefill" ? "subscriber" : "internal",
     subscriberId,
     title: "",
     description: "",
@@ -169,6 +172,7 @@ function getInitialForm(subscriberId: string, selfStaffId: string): TaskFormStat
 }
 
 export default function TasksPage() {
+  const searchParams = useSearchParams();
   const subscribers = useMemo(() => seedSubscribers(), []);
   const staff = useMemo(() => seedTaskStaff(), []);
   const teams = useMemo(() => seedTaskTeams(), []);
@@ -179,6 +183,7 @@ export default function TasksPage() {
   const [tasks, setTasks] = useState<MockTask[]>(() => seedTasks());
   const [selectedTaskId, setSelectedTaskId] = useState<string | null>(() => seedTasks()[0]?.id ?? null);
   const [permissionModeKey, setPermissionModeKey] = useState<PermissionPreview["key"]>("manager");
+  const [taskContextMode, setTaskContextMode] = useState<TaskContextMode>("general");
   const [form, setForm] = useState<TaskFormState>(() => getInitialForm(seedSubscribers()[0]?.id ?? "", "staff_03"));
   const [draftCompletion, setDraftCompletion] = useState("");
   const [slotCategoryCode, setSlotCategoryCode] = useState<AutoTaskCode>("service_visit");
@@ -194,6 +199,27 @@ export default function TasksPage() {
     () => autoCategories.find((item) => item.code === slotCategoryCode) ?? autoCategories[0],
     [autoCategories, slotCategoryCode]
   );
+
+  const selectedSubscriber = useMemo(() => subscribers.find((item) => item.id === form.subscriberId) ?? null, [subscribers, form.subscriberId]);
+
+  useEffect(() => {
+    const subscriberId = searchParams.get("subscriberId") || "";
+    const source = searchParams.get("source") || "";
+    const subscriberExists = subscribers.some((item) => item.id === subscriberId);
+
+    if (source === "subscriber-card" && subscriberExists) {
+      setTaskContextMode("subscriber_prefill");
+      setForm((prev) => ({
+        ...prev,
+        kind: "subscriber",
+        subscriberId,
+        assignedStaffIds: prev.assignedStaffIds.length > 0 ? prev.assignedStaffIds : [permissionMode.selfStaffId],
+      }));
+      return;
+    }
+
+    setTaskContextMode("general");
+  }, [searchParams, subscribers, permissionMode.selfStaffId]);
 
   const visibleTasks = useMemo(() => {
     const from = weekStart.getTime();
@@ -247,7 +273,8 @@ export default function TasksPage() {
   }
 
   function resetForm() {
-    setForm(getInitialForm(subscribers[0]?.id ?? "", permissionMode.selfStaffId));
+    const subscriberId = taskContextMode === "subscriber_prefill" ? form.subscriberId || subscribers[0]?.id || "" : subscribers[0]?.id || "";
+    setForm(getInitialForm(subscriberId, permissionMode.selfStaffId, taskContextMode));
   }
 
   function handleCreateTask(e: React.FormEvent<HTMLFormElement>) {
@@ -364,7 +391,10 @@ export default function TasksPage() {
 
           <Card title="Dodaj zadanie" desc="Tworzymy flow na mockach. Finalny backend podłączymy dopiero, gdy UX przestanie trzeszczeć jak tania szafa.">
             <form className="space-y-3" onSubmit={handleCreateTask}>
-              <Field label="Typ zadania">
+              <Field
+                label="Typ zadania"
+                helper={taskContextMode === "subscriber_prefill" ? `Formularz otwarty z kartoteki abonenta. Typ zadania jest zablokowany na trybie "na abonencie", żeby operator nie musiał wybierać tej samej osoby drugi raz jak w kiepskim RPG.` : undefined}
+              >
                 <div className="grid grid-cols-2 gap-2">
                   {([
                     ["internal", "Wewnętrzne ISP"],
@@ -373,10 +403,14 @@ export default function TasksPage() {
                     <button
                       key={value}
                       type="button"
-                      onClick={() => setForm((prev) => ({ ...prev, kind: value }))}
+                      onClick={() => {
+                        if (taskContextMode === "subscriber_prefill") return;
+                        setForm((prev) => ({ ...prev, kind: value }));
+                      }}
                       className={[
                         "rounded-md border px-3 py-2 text-sm transition",
                         form.kind === value ? "bg-muted/60" : "hover:bg-muted/40",
+                        taskContextMode === "subscriber_prefill" ? "cursor-not-allowed opacity-70" : "",
                       ].join(" ")}
                     >
                       {label}
@@ -386,19 +420,41 @@ export default function TasksPage() {
               </Field>
 
               {form.kind === "subscriber" && (
-                <Field label="Abonent">
-                  <select
-                    value={form.subscriberId}
-                    onChange={(e) => setForm((prev) => ({ ...prev, subscriberId: e.target.value }))}
-                    className="w-full rounded-md border bg-background px-3 py-2 text-sm"
-                  >
-                    {subscribers.map((subscriber) => (
-                      <option key={subscriber.id} value={subscriber.id}>
-                        {subscriber.display_name} ({subscriber.id})
-                      </option>
-                    ))}
-                  </select>
-                </Field>
+                <>
+                  <Field label="Abonent" helper={taskContextMode === "subscriber_prefill" ? "Kontekst pobrany z karty abonenta. Tutaj tylko pokazujemy, na kim zakładamy zadanie." : undefined}>
+                    <select
+                      value={form.subscriberId}
+                      onChange={(e) => setForm((prev) => ({ ...prev, subscriberId: e.target.value }))}
+                      disabled={taskContextMode === "subscriber_prefill"}
+                      className="w-full rounded-md border bg-background px-3 py-2 text-sm disabled:cursor-not-allowed disabled:opacity-70"
+                    >
+                      {subscribers.map((subscriber) => (
+                        <option key={subscriber.id} value={subscriber.id}>
+                          {subscriber.display_name} ({subscriber.id})
+                        </option>
+                      ))}
+                    </select>
+                  </Field>
+
+                  {selectedSubscriber && (
+                    <div className="rounded-xl border bg-muted/20 p-3 text-sm">
+                      <div className="flex flex-wrap items-start justify-between gap-3">
+                        <div>
+                          <div className="font-semibold">{selectedSubscriber.display_name}</div>
+                          <div className="mt-1 text-xs text-muted-foreground">{selectedSubscriber.id} • {selectedSubscriber.phone || "brak telefonu"}</div>
+                        </div>
+                        <Link href={`/subscribers/${selectedSubscriber.id}`} className="rounded-md border px-3 py-1.5 text-xs hover:bg-muted/40">
+                          Otwórz kartę abonenta
+                        </Link>
+                      </div>
+                      <div className="mt-2 text-xs text-muted-foreground">
+                        {selectedSubscriber.addresses?.[0]
+                          ? `${selectedSubscriber.addresses[0].city}, ${selectedSubscriber.addresses[0].street} ${selectedSubscriber.addresses[0].building_no}${selectedSubscriber.addresses[0].apartment_no ? `/${selectedSubscriber.addresses[0].apartment_no}` : ""}`
+                          : "Brak adresu w mocku"}
+                      </div>
+                    </div>
+                  )}
+                </>
               )}
 
               <Field label="Kategoria automatyczna / źródło">
@@ -617,6 +673,11 @@ export default function TasksPage() {
                   <div>
                     <div className="text-base font-semibold">{selectedTask.title}</div>
                     <div className="mt-1 text-xs text-muted-foreground">{selectedTask.kind === "subscriber" ? `Abonent: ${selectedTask.subscriberName}` : "Wewnętrzne Gemini / ISP"}</div>
+                    {selectedTask.kind === "subscriber" && selectedTask.subscriberId ? (
+                      <Link href={`/subscribers/${selectedTask.subscriberId}`} className="mt-2 inline-flex rounded-md border px-2 py-1 text-xs hover:bg-muted/40">
+                        Otwórz kartę abonenta
+                      </Link>
+                    ) : null}
                   </div>
                   <div className="flex flex-wrap gap-2">
                     <span className={["inline-flex rounded-md border px-2 py-1 text-xs font-medium", priorityBadge(selectedTask.priority)].join(" ")}>{selectedTask.priority}</span>

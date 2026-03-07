@@ -164,11 +164,16 @@ function SubscriberTasks({ s }: { s: SubscriberRecord }) {
       title="Zadania powiązane z abonentem"
       desc="Tutaj pokazujemy tylko listę z modułu Zadania. Bez drugiego kalendarza w kartotece, bo duplikowanie bytów to szybka droga do cyfrowego bagna."
     >
-      <div className="mb-3 flex items-center justify-between gap-3">
+      <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
         <div className="text-xs text-muted-foreground">Źródło: mock modułu /tasks → zadania na abonencie</div>
-        <Link href="/tasks" className="rounded-md border px-3 py-1.5 text-sm hover:bg-muted/40">
-          Otwórz moduł Zadania
-        </Link>
+        <div className="flex flex-wrap gap-2">
+          <Link href={`/tasks?source=subscriber-card&subscriberId=${s.id}`} className="rounded-md border px-3 py-1.5 text-sm hover:bg-muted/40">
+            Dodaj zadanie dla tego abonenta
+          </Link>
+          <Link href="/tasks" className="rounded-md border px-3 py-1.5 text-sm hover:bg-muted/40">
+            Otwórz moduł Zadania
+          </Link>
+        </div>
       </div>
 
       {rows.length === 0 ? (
