@@ -7,6 +7,7 @@ import { useEffect, useMemo, useState } from "react";
 import { SimpleModal } from "@/components/SimpleModal";
 import { PrgAddressFinder, type PrgAddressPick } from "@/components/PrgAddressFinder";
 import { ApiError, apiFetch } from "@/lib/api";
+import { getStaffLabel, getTasksForSubscriber } from "@/lib/mockTasks";
 import { useAuth } from "@/lib/auth";
 import { formatKind, formatStatus, seedSubscribers, type SubscriberRecord } from "@/lib/mockSubscribers";
 
@@ -21,7 +22,8 @@ type TabKey =
   | "avios"
   | "zgody"
   | "historia"
-  | "korespondencja";
+  | "korespondencja"
+  | "zadania";
 
 const TABS: Array<{ key: TabKey; label: string }> = [
   { key: "dane", label: "Dane" },
@@ -35,6 +37,7 @@ const TABS: Array<{ key: TabKey; label: string }> = [
   { key: "zgody", label: "Zgody" },
   { key: "historia", label: "Historia" },
   { key: "korespondencja", label: "Korespondencja" },
+  { key: "zadania", label: "Zadania" },
 ];
 
 function Tabs({ value, onChange }: { value: TabKey; onChange: (k: TabKey) => void }) {
@@ -151,6 +154,58 @@ function parseSubscriberNumericId(subscriberId: string): number | null {
   if (!digits) return null;
   const parsed = Number.parseInt(digits, 10);
   return Number.isFinite(parsed) ? parsed : null;
+}
+
+function SubscriberTasks({ s }: { s: SubscriberRecord }) {
+  const rows = useMemo(() => getTasksForSubscriber(s.id), [s.id]);
+
+  return (
+    <Card
+      title="Zadania powiązane z abonentem"
+      desc="Tutaj pokazujemy tylko listę z modułu Zadania. Bez drugiego kalendarza w kartotece, bo duplikowanie bytów to szybka droga do cyfrowego bagna."
+    >
+      <div className="mb-3 flex items-center justify-between gap-3">
+        <div className="text-xs text-muted-foreground">Źródło: mock modułu /tasks → zadania na abonencie</div>
+        <Link href="/tasks" className="rounded-md border px-3 py-1.5 text-sm hover:bg-muted/40">
+          Otwórz moduł Zadania
+        </Link>
+      </div>
+
+      {rows.length === 0 ? (
+        <div className="rounded-lg border border-dashed p-4 text-sm text-muted-foreground">Brak zadań powiązanych z tym abonentem.</div>
+      ) : (
+        <div className="space-y-3">
+          {rows.map((row) => (
+            <div key={row.id} className="rounded-xl border p-3">
+              <div className="flex flex-wrap items-start justify-between gap-3">
+                <div>
+                  <div className="text-sm font-semibold">{row.title}</div>
+                  <div className="mt-1 text-xs text-muted-foreground">
+                    {formatDateTime(row.startAt)} → {formatDateTime(row.endAt)}
+                  </div>
+                </div>
+                <span className={["inline-flex items-center rounded-md border px-2 py-1 text-xs font-medium", statusBadgeClass(row.status)].join(" ")}>
+                  {row.status}
+                </span>
+              </div>
+
+              <div className="mt-3 grid grid-cols-1 gap-3 lg:grid-cols-2">
+                <div className="rounded-lg border bg-muted/20 p-3">
+                  <div className="text-xs text-muted-foreground">Pracownicy / zespoły</div>
+                  <div className="mt-1 text-sm font-medium">{getStaffLabel(row.assignedStaffIds)}</div>
+                  <div className="mt-1 text-xs text-muted-foreground">{row.assignedTeamNames.join(", ") || "—"}</div>
+                </div>
+                <div className="rounded-lg border bg-muted/20 p-3">
+                  <div className="text-xs text-muted-foreground">Opis wykonania</div>
+                  <div className="mt-1 text-sm">{row.completionNote || "Jeszcze niezamknięte / brak opisu wykonania."}</div>
+                </div>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+    </Card>
+  );
 }
 
 function CorrespondenceSms({ s }: { s: SubscriberRecord }) {
@@ -1099,6 +1154,8 @@ export default function SubscriberDetailsPage({ params }: { params: { id: string
           )}
 
           {tab === "korespondencja" && <CorrespondenceSms s={s} />}
+
+          {tab === "zadania" && <SubscriberTasks s={s} />}
         </div>
       </div>
     </div>

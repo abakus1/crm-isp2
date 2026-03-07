@@ -41,6 +41,11 @@ export function Sidebar() {
         ],
       },
       {
+        label: "Zadania",
+        key: "tasks",
+        items: [{ label: "Kalendarz i lista", href: "/tasks" }],
+      },
+      {
         label: "Umowy",
         key: "contracts",
         items: [{ label: "Lista (placeholder)", href: "/contracts", requireAny: ["contracts.read"] }],
@@ -143,6 +148,7 @@ export function Sidebar() {
   // auto-open
   const autoOpenKey = useMemo(() => {
     if (pathname.startsWith("/staff")) return "staff";
+    if (pathname.startsWith("/tasks")) return "tasks";
     if (pathname.startsWith("/contracts")) return "contracts";
     if (pathname.startsWith("/services")) return "services";
     if (pathname.startsWith("/subscribers")) return "subscribers";
@@ -154,6 +160,7 @@ export function Sidebar() {
 
   const [open, setOpen] = useState<Record<string, boolean>>(() => ({
     staff: autoOpenKey === "staff",
+    tasks: autoOpenKey === "tasks",
     contracts: autoOpenKey === "contracts",
     services: autoOpenKey === "services",
     subscribers: autoOpenKey === "subscribers",
