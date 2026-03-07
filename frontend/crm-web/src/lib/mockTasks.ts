@@ -21,6 +21,7 @@ export type MockTask = {
   subscriberId: string | null;
   subscriberName: string | null;
   assignedStaffIds: string[];
+  assignedTeamIds?: string[];
   assignedTeamNames: string[];
   startAt: string;
   endAt: string;
@@ -88,7 +89,8 @@ export function seedTasks(): MockTask[] {
       subscriberId: jan.id,
       subscriberName: jan.display_name,
       assignedStaffIds: ["staff_01", "staff_05"],
-      assignedTeamNames: ["Instalacje", "Sieć"],
+      assignedTeamIds: ["team_install_1"],
+      assignedTeamNames: ["Ekipa monterska 1"],
       startAt: buildIso("2026-03-09", "09:00"),
       endAt: buildIso("2026-03-09", "11:30"),
       createdBy: "Paweł Koordynator",
@@ -106,7 +108,8 @@ export function seedTasks(): MockTask[] {
       subscriberId: null,
       subscriberName: null,
       assignedStaffIds: ["staff_03"],
-      assignedTeamNames: ["Operacje"],
+      assignedTeamIds: ["team_bok_ops"],
+      assignedTeamNames: ["BOK / Operacje"],
       startAt: buildIso("2026-03-10", "08:30"),
       endAt: buildIso("2026-03-10", "10:00"),
       createdBy: "Paweł Koordynator",
@@ -123,7 +126,8 @@ export function seedTasks(): MockTask[] {
       subscriberId: anna.id,
       subscriberName: anna.display_name,
       assignedStaffIds: ["staff_02"],
-      assignedTeamNames: ["Serwis"],
+      assignedTeamIds: ["team_service_1"],
+      assignedTeamNames: ["Serwis Kraków"],
       startAt: buildIso("2026-03-11", "13:00"),
       endAt: buildIso("2026-03-11", "14:30"),
       createdBy: "Julia BOK",
@@ -141,7 +145,8 @@ export function seedTasks(): MockTask[] {
       subscriberId: jan.id,
       subscriberName: jan.display_name,
       assignedStaffIds: ["staff_01"],
-      assignedTeamNames: ["Instalacje"],
+      assignedTeamIds: ["team_install_1"],
+      assignedTeamNames: ["Ekipa monterska 1"],
       startAt: buildIso("2026-03-12", "15:00"),
       endAt: buildIso("2026-03-12", "17:00"),
       createdBy: "Julia BOK",
@@ -159,7 +164,8 @@ export function seedTasks(): MockTask[] {
       subscriberId: null,
       subscriberName: null,
       assignedStaffIds: ["staff_03", "staff_04"],
-      assignedTeamNames: ["Operacje", "BOK"],
+      assignedTeamIds: ["team_bok_ops"],
+      assignedTeamNames: ["BOK / Operacje"],
       startAt: buildIso("2026-03-13", "10:00"),
       endAt: buildIso("2026-03-13", "11:00"),
       createdBy: "Paweł Koordynator",

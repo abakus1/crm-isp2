@@ -1,9 +1,17 @@
 "use client";
 
-import { useMemo, useState } from "react";
 import Link from "next/link";
+import { useMemo, useState } from "react";
 
 import { seedSubscribers } from "@/lib/mockSubscribers";
+import {
+  getClientVisibleSlots,
+  getTeamLabel,
+  seedAutoTaskCategories,
+  seedTaskTeams,
+  seedWindowDefinitions,
+  type AutoTaskCode,
+} from "@/lib/mockTaskConfig";
 import {
   getStaffLabel,
   seedTaskStaff,
@@ -16,6 +24,8 @@ import {
   type TaskStatus,
 } from "@/lib/mockTasks";
 
+type AssignmentMode = "staff" | "team";
+
 type TaskFormState = {
   kind: TaskKind;
   subscriberId: string;
@@ -25,11 +35,15 @@ type TaskFormState = {
   startTime: string;
   endTime: string;
   assignedStaffIds: string[];
+  assignedTeamIds: string[];
+  assignmentMode: AssignmentMode;
   priority: TaskPriority;
+  autoCategoryCode: AutoTaskCode | "manual";
 };
 
 const HOUR_HEIGHT = 64;
 const DAY_HEIGHT = 24 * HOUR_HEIGHT;
+const BASE_WEEK = new Date("2026-03-09T08:00:00");
 
 function startOfWeek(date: Date) {
   const clone = new Date(date);
@@ -137,26 +151,37 @@ function TextInput(props: React.InputHTMLAttributes<HTMLInputElement>) {
   return <input {...props} className={["w-full rounded-md border bg-background px-3 py-2 text-sm", props.className || ""].join(" ")} />;
 }
 
+function getInitialForm(subscriberId: string, selfStaffId: string): TaskFormState {
+  return {
+    kind: "internal",
+    subscriberId,
+    title: "",
+    description: "",
+    date: formatDateKey(startOfWeek(BASE_WEEK)),
+    startTime: "09:00",
+    endTime: "10:00",
+    assignedStaffIds: [selfStaffId],
+    assignedTeamIds: [],
+    assignmentMode: "staff",
+    priority: "normal",
+    autoCategoryCode: "manual",
+  };
+}
+
 export default function TasksPage() {
   const subscribers = useMemo(() => seedSubscribers(), []);
   const staff = useMemo(() => seedTaskStaff(), []);
+  const teams = useMemo(() => seedTaskTeams(), []);
+  const autoCategories = useMemo(() => seedAutoTaskCategories(), []);
+  const windows = useMemo(() => seedWindowDefinitions(), []);
 
-  const [weekStart, setWeekStart] = useState<Date>(() => startOfWeek(new Date("2026-03-09T08:00:00")));
+  const [weekStart, setWeekStart] = useState<Date>(() => startOfWeek(BASE_WEEK));
   const [tasks, setTasks] = useState<MockTask[]>(() => seedTasks());
   const [selectedTaskId, setSelectedTaskId] = useState<string | null>(() => seedTasks()[0]?.id ?? null);
   const [permissionModeKey, setPermissionModeKey] = useState<PermissionPreview["key"]>("manager");
-  const [form, setForm] = useState<TaskFormState>({
-    kind: "internal",
-    subscriberId: subscribers[0]?.id ?? "",
-    title: "",
-    description: "",
-    date: formatDateKey(startOfWeek(new Date("2026-03-09T08:00:00"))),
-    startTime: "09:00",
-    endTime: "10:00",
-    assignedStaffIds: ["staff_03"],
-    priority: "normal",
-  });
+  const [form, setForm] = useState<TaskFormState>(() => getInitialForm(seedSubscribers()[0]?.id ?? "", "staff_03"));
   const [draftCompletion, setDraftCompletion] = useState("");
+  const [slotCategoryCode, setSlotCategoryCode] = useState<AutoTaskCode>("service_visit");
 
   const permissionMode = useMemo(
     () => TASK_PERMISSION_PRESETS.find((item) => item.key === permissionModeKey) ?? TASK_PERMISSION_PRESETS[0],
@@ -165,6 +190,10 @@ export default function TasksPage() {
 
   const days = useMemo(() => Array.from({ length: 7 }, (_, index) => addDays(weekStart, index)), [weekStart]);
   const selectedTask = useMemo(() => tasks.find((task) => task.id === selectedTaskId) ?? null, [tasks, selectedTaskId]);
+  const selectedAutoCategory = useMemo(
+    () => autoCategories.find((item) => item.code === slotCategoryCode) ?? autoCategories[0],
+    [autoCategories, slotCategoryCode]
+  );
 
   const visibleTasks = useMemo(() => {
     const from = weekStart.getTime();
@@ -189,31 +218,42 @@ export default function TasksPage() {
     return map;
   }, [days, visibleTasks]);
 
+  const visibleSlots = useMemo(() => getClientVisibleSlots(formatDateKey(days[1] ?? days[0]), slotCategoryCode), [days, slotCategoryCode]);
+
+  function syncAssignmentFromTeam(teamIds: string[]) {
+    const assignedStaffIds = Array.from(new Set(teams.filter((team) => teamIds.includes(team.id)).flatMap((team) => team.memberStaffIds)));
+    return assignedStaffIds;
+  }
+
   function toggleAssignedStaff(staffId: string) {
     setForm((prev) => {
       const exists = prev.assignedStaffIds.includes(staffId);
       const nextIds = exists ? prev.assignedStaffIds.filter((id) => id !== staffId) : [...prev.assignedStaffIds, staffId];
-      return { ...prev, assignedStaffIds: nextIds };
+      return { ...prev, assignedStaffIds: nextIds, assignedTeamIds: [], assignmentMode: "staff" };
+    });
+  }
+
+  function toggleAssignedTeam(teamId: string) {
+    setForm((prev) => {
+      const exists = prev.assignedTeamIds.includes(teamId);
+      const nextTeamIds = exists ? prev.assignedTeamIds.filter((id) => id !== teamId) : [...prev.assignedTeamIds, teamId];
+      return {
+        ...prev,
+        assignedTeamIds: nextTeamIds,
+        assignedStaffIds: syncAssignmentFromTeam(nextTeamIds),
+        assignmentMode: "team",
+      };
     });
   }
 
   function resetForm() {
-    setForm({
-      kind: "internal",
-      subscriberId: subscribers[0]?.id ?? "",
-      title: "",
-      description: "",
-      date: formatDateKey(weekStart),
-      startTime: "09:00",
-      endTime: "10:00",
-      assignedStaffIds: permissionMode.canAssignOthers ? [permissionMode.selfStaffId] : [permissionMode.selfStaffId],
-      priority: "normal",
-    });
+    setForm(getInitialForm(subscribers[0]?.id ?? "", permissionMode.selfStaffId));
   }
 
   function handleCreateTask(e: React.FormEvent<HTMLFormElement>) {
     e.preventDefault();
     const assignedStaffIds = permissionMode.canAssignOthers ? form.assignedStaffIds : [permissionMode.selfStaffId];
+    const assignedTeamIds = permissionMode.canAssignOthers ? form.assignedTeamIds : [];
     if (!form.title.trim() || !form.description.trim() || assignedStaffIds.length === 0) return;
 
     const subscriber = subscribers.find((item) => item.id === form.subscriberId) ?? null;
@@ -227,7 +267,8 @@ export default function TasksPage() {
       subscriberId: form.kind === "subscriber" ? subscriber?.id ?? null : null,
       subscriberName: form.kind === "subscriber" ? subscriber?.display_name ?? null : null,
       assignedStaffIds,
-      assignedTeamNames: Array.from(new Set(staff.filter((item) => assignedStaffIds.includes(item.id)).map((item) => item.team))),
+      assignedTeamIds,
+      assignedTeamNames: assignedTeamIds.length > 0 ? teams.filter((team) => assignedTeamIds.includes(team.id)).map((team) => team.name) : [],
       startAt: `${form.date}T${form.startTime}:00`,
       endAt: `${form.date}T${form.endTime}:00`,
       createdBy: staff.find((item) => item.id === permissionMode.selfStaffId)?.name ?? "UI mock",
@@ -269,17 +310,20 @@ export default function TasksPage() {
         <div>
           <div className="text-sm font-semibold">Zadania</div>
           <div className="text-xs text-muted-foreground">
-            UI + mocki pod kanoniczny moduł operacyjny. Kalendarz tygodniowy jest tu silnikiem widoku, a nie osobnym kosmitą z innej planety.
+            UI + mocki pod kanoniczny moduł operacyjny. Kalendarz tygodniowy jest silnikiem widoku, a konfiguracja ekip / slotów siedzi osobno w Konfiguracja → Zadania.
           </div>
         </div>
         <div className="flex flex-wrap items-center gap-2">
+          <Link href="/config/tasks" className="rounded-md border px-3 py-2 text-sm hover:bg-muted/40">
+            Konfiguracja zadań
+          </Link>
           <Link href="/subscribers" className="rounded-md border px-3 py-2 text-sm hover:bg-muted/40">
             Abonenci
           </Link>
           <button type="button" onClick={() => setWeekStart((prev) => addDays(prev, -7))} className="rounded-md border px-3 py-2 text-sm hover:bg-muted/40">
             ← 7 dni
           </button>
-          <button type="button" onClick={() => setWeekStart(startOfWeek(new Date("2026-03-09T08:00:00")))} className="rounded-md border px-3 py-2 text-sm hover:bg-muted/40">
+          <button type="button" onClick={() => setWeekStart(startOfWeek(BASE_WEEK))} className="rounded-md border px-3 py-2 text-sm hover:bg-muted/40">
             Dziś / tydzień bazowy
           </button>
           <button type="button" onClick={() => setWeekStart((prev) => addDays(prev, 7))} className="rounded-md border px-3 py-2 text-sm hover:bg-muted/40">
@@ -288,7 +332,7 @@ export default function TasksPage() {
         </div>
       </div>
 
-      <div className="grid grid-cols-1 gap-4 xl:grid-cols-[340px_minmax(0,1fr)_360px]">
+      <div className="grid grid-cols-1 gap-4 xl:grid-cols-[360px_minmax(0,1fr)_360px]">
         <div className="space-y-4">
           <Card title="Scenariusz uprawnień" desc="UI-only symulacja: osobne prawa do przydzielania i edycji. Dzięki temu flow nie udaje, że każdy może wszystko, bo to zawsze kończy się biznesową sałatką.">
             <div className="grid grid-cols-1 gap-2">
@@ -301,6 +345,7 @@ export default function TasksPage() {
                     setForm((prev) => ({
                       ...prev,
                       assignedStaffIds: preset.canAssignOthers ? prev.assignedStaffIds : [preset.selfStaffId],
+                      assignedTeamIds: preset.canAssignOthers ? prev.assignedTeamIds : [],
                     }));
                   }}
                   className={[
@@ -356,6 +401,21 @@ export default function TasksPage() {
                 </Field>
               )}
 
+              <Field label="Kategoria automatyczna / źródło">
+                <select
+                  value={form.autoCategoryCode}
+                  onChange={(e) => setForm((prev) => ({ ...prev, autoCategoryCode: e.target.value as TaskFormState["autoCategoryCode"] }))}
+                  className="w-full rounded-md border bg-background px-3 py-2 text-sm"
+                >
+                  <option value="manual">Manualne / ręczne</option>
+                  {autoCategories.map((category) => (
+                    <option key={category.id} value={category.code}>
+                      {category.name}
+                    </option>
+                  ))}
+                </select>
+              </Field>
+
               <Field label="Tytuł">
                 <TextInput value={form.title} onChange={(e) => setForm((prev) => ({ ...prev, title: e.target.value }))} placeholder="np. Wizyta serwisowa / instalacja / zadanie wewnętrzne" />
               </Field>
@@ -395,48 +455,88 @@ export default function TasksPage() {
                 </select>
               </Field>
 
-              <Field
-                label="Przypisani pracownicy"
-                helper={
-                  permissionMode.canAssignOthers
-                    ? "W tej symulacji kierownik może przypisać pojedynczą osobę albo zespół."
-                    : "Tryb self-only: zwykły pracownik dodaje zadanie tylko sobie. Checkboxy są tylko poglądowe, żeby pokazać przyszłe flow."
-                }
-              >
-                <div className="space-y-2">
-                  {staff.map((member) => {
-                    const checked = permissionMode.canAssignOthers
-                      ? form.assignedStaffIds.includes(member.id)
-                      : member.id === permissionMode.selfStaffId;
-                    return (
-                      <label key={member.id} className="flex items-start gap-3 rounded-lg border px-3 py-2 text-sm">
-                        <input
-                          type="checkbox"
-                          className="mt-0.5"
-                          checked={checked}
-                          disabled={!permissionMode.canAssignOthers}
-                          onChange={() => toggleAssignedStaff(member.id)}
-                        />
-                        <span>
-                          <span className="font-medium">{member.name}</span>
-                          <span className="block text-xs text-muted-foreground">
-                            {member.team} · {member.role}
-                          </span>
-                        </span>
-                      </label>
-                    );
-                  })}
+              <Field label="Tryb przypisania" helper="Zespół oznacza ekipę logiczną. W kalendarzu zadanie i tak wpada wszystkim członkom ekipy, ale źródłem przypisania zostaje team — czyli mniej bagna, więcej sensu.">
+                <div className="grid grid-cols-2 gap-2">
+                  {([
+                    ["staff", "Pojedyncze osoby"],
+                    ["team", "Zespół / ekipa"],
+                  ] as Array<[AssignmentMode, string]>).map(([value, label]) => (
+                    <button
+                      key={value}
+                      type="button"
+                      onClick={() => setForm((prev) => ({ ...prev, assignmentMode: value }))}
+                      className={[
+                        "rounded-md border px-3 py-2 text-sm transition",
+                        form.assignmentMode === value ? "bg-muted/60" : "hover:bg-muted/40",
+                      ].join(" ")}
+                    >
+                      {label}
+                    </button>
+                  ))}
                 </div>
               </Field>
 
-              <button
-                type="submit"
-                disabled={!form.title.trim() || !form.description.trim()}
-                className="rounded-md border px-3 py-2 text-sm hover:bg-muted/40 disabled:cursor-not-allowed disabled:opacity-50"
-              >
+              {form.assignmentMode === "team" ? (
+                <Field label="Przypisane zespoły" helper={permissionMode.canAssignOthers ? "Możesz zaznaczyć jedną lub więcej ekip. Mock zaciąga wszystkich członków do bloku zadania." : "Tryb self-only nie pozwala przypinać ekip — pracownik nie staje się nagle kapitanem całego statku."}>
+                  <div className="space-y-2">
+                    {teams.map((team) => {
+                      const checked = permissionMode.canAssignOthers ? form.assignedTeamIds.includes(team.id) : false;
+                      return (
+                        <label key={team.id} className="flex items-start gap-3 rounded-lg border px-3 py-2 text-sm">
+                          <input type="checkbox" className="mt-0.5" checked={checked} disabled={!permissionMode.canAssignOthers} onChange={() => toggleAssignedTeam(team.id)} />
+                          <span>
+                            <span className="font-medium">{team.name}</span>
+                            <span className="block text-xs text-muted-foreground">{team.description}</span>
+                          </span>
+                        </label>
+                      );
+                    })}
+                  </div>
+                </Field>
+              ) : (
+                <Field
+                  label="Przypisani pracownicy"
+                  helper={
+                    permissionMode.canAssignOthers
+                      ? "W tej symulacji kierownik może przypisać pojedynczą osobę albo zespół."
+                      : "Tryb self-only: zwykły pracownik dodaje zadanie tylko sobie. Checkboxy są poglądowe, żeby flow nie kłamał o przyszłym RBAC."
+                  }
+                >
+                  <div className="space-y-2">
+                    {staff.map((member) => {
+                      const checked = permissionMode.canAssignOthers ? form.assignedStaffIds.includes(member.id) : member.id === permissionMode.selfStaffId;
+                      return (
+                        <label key={member.id} className="flex items-start gap-3 rounded-lg border px-3 py-2 text-sm">
+                          <input type="checkbox" className="mt-0.5" checked={checked} disabled={!permissionMode.canAssignOthers} onChange={() => toggleAssignedStaff(member.id)} />
+                          <span>
+                            <span className="font-medium">{member.name}</span>
+                            <span className="block text-xs text-muted-foreground">
+                              {member.team} · {member.role}
+                            </span>
+                          </span>
+                        </label>
+                      );
+                    })}
+                  </div>
+                </Field>
+              )}
+
+              <div className="rounded-xl border bg-muted/20 p-3 text-xs text-muted-foreground">
+                Finalne przypisanie: {form.assignedTeamIds.length > 0 ? `zespół ${getTeamLabel(form.assignedTeamIds)}` : getStaffLabel(form.assignedStaffIds) || "—"}
+              </div>
+
+              <button type="submit" disabled={!form.title.trim() || !form.description.trim()} className="rounded-md border px-3 py-2 text-sm hover:bg-muted/40 disabled:cursor-not-allowed disabled:opacity-50">
                 Dodaj zadanie (mock)
               </button>
             </form>
+          </Card>
+
+          <Card title="Szybki podgląd konfiguracji" desc="Tu tylko teaser. Pełne edytowalne okna siedzą w Konfiguracja → Zadania, żeby operacja i konfiguracja nie gryzły się jak dwa routery na tym samym adresie IP.">
+            <div className="space-y-2 text-sm">
+              <div className="rounded-lg border p-3">Ekipy aktywne: {teams.length}</div>
+              <div className="rounded-lg border p-3">Kategorie automatyczne: {autoCategories.length}</div>
+              <div className="rounded-lg border p-3">Definicje okien: {windows.length}</div>
+            </div>
           </Card>
         </div>
 
@@ -455,11 +555,7 @@ export default function TasksPage() {
               <div className="grid grid-cols-[72px_repeat(7,minmax(120px,1fr))]">
                 <div className="relative border-r" style={{ height: `${DAY_HEIGHT}px` }}>
                   {Array.from({ length: 24 }, (_, hour) => (
-                    <div
-                      key={hour}
-                      className="absolute inset-x-0 border-b px-2 text-[11px] text-muted-foreground"
-                      style={{ top: `${hour * HOUR_HEIGHT}px`, height: `${HOUR_HEIGHT}px` }}
-                    >
+                    <div key={hour} className="absolute inset-x-0 border-b px-2 text-[11px] text-muted-foreground" style={{ top: `${hour * HOUR_HEIGHT}px`, height: `${HOUR_HEIGHT}px` }}>
                       {`${`${hour}`.padStart(2, "0")}:00`}
                     </div>
                   ))}
@@ -471,11 +567,7 @@ export default function TasksPage() {
                   return (
                     <div key={key} className="relative border-r last:border-r-0" style={{ height: `${DAY_HEIGHT}px` }}>
                       {Array.from({ length: 24 }, (_, hour) => (
-                        <div
-                          key={`${key}-${hour}`}
-                          className="absolute inset-x-0 border-b"
-                          style={{ top: `${hour * HOUR_HEIGHT}px`, height: `${HOUR_HEIGHT}px` }}
-                        />
+                        <div key={`${key}-${hour}`} className="absolute inset-x-0 border-b" style={{ top: `${hour * HOUR_HEIGHT}px`, height: `${HOUR_HEIGHT}px` }} />
                       ))}
 
                       {items.map((task) => {
@@ -503,6 +595,7 @@ export default function TasksPage() {
                             <div className="mt-1 text-[11px] text-muted-foreground line-clamp-2">
                               {task.kind === "subscriber" ? task.subscriberName : "Wewnętrzne ISP"}
                             </div>
+                            <div className="mt-1 text-[11px] text-muted-foreground line-clamp-1">{task.assignedTeamNames.join(", ") || getStaffLabel(task.assignedStaffIds)}</div>
                           </button>
                         );
                       })}
@@ -523,23 +616,19 @@ export default function TasksPage() {
                 <div className="flex flex-wrap items-start justify-between gap-2">
                   <div>
                     <div className="text-base font-semibold">{selectedTask.title}</div>
-                    <div className="mt-1 text-xs text-muted-foreground">
-                      {selectedTask.kind === "subscriber" ? `Abonent: ${selectedTask.subscriberName}` : "Wewnętrzne Gemini / ISP"}
-                    </div>
+                    <div className="mt-1 text-xs text-muted-foreground">{selectedTask.kind === "subscriber" ? `Abonent: ${selectedTask.subscriberName}` : "Wewnętrzne Gemini / ISP"}</div>
                   </div>
                   <div className="flex flex-wrap gap-2">
-                    <span className={["inline-flex rounded-md border px-2 py-1 text-xs font-medium", priorityBadge(selectedTask.priority)].join(" ")}>
-                      {selectedTask.priority}
-                    </span>
-                    <span className={["inline-flex rounded-md border px-2 py-1 text-xs font-medium", statusBadge(selectedTask.status)].join(" ")}>
-                      {selectedTask.status}
-                    </span>
+                    <span className={["inline-flex rounded-md border px-2 py-1 text-xs font-medium", priorityBadge(selectedTask.priority)].join(" ")}>{selectedTask.priority}</span>
+                    <span className={["inline-flex rounded-md border px-2 py-1 text-xs font-medium", statusBadge(selectedTask.status)].join(" ")}>{selectedTask.status}</span>
                   </div>
                 </div>
 
                 <div className="rounded-xl border p-3">
                   <div className="text-xs text-muted-foreground">Zakres czasu</div>
-                  <div className="mt-1 font-medium">{formatDateTime(selectedTask.startAt)} → {formatDateTime(selectedTask.endAt)}</div>
+                  <div className="mt-1 font-medium">
+                    {formatDateTime(selectedTask.startAt)} → {formatDateTime(selectedTask.endAt)}
+                  </div>
                 </div>
 
                 <div className="rounded-xl border p-3">
@@ -562,24 +651,14 @@ export default function TasksPage() {
 
                 <div className="rounded-xl border p-3">
                   <div className="text-xs text-muted-foreground">Uprawnienia w tym widoku</div>
-                  <div className="mt-1 text-sm">
-                    assign/change: {permissionMode.canAssignOthers ? "TAK" : "NIE"} · edit existing: {permissionMode.canEditExisting ? "TAK" : "NIE"}
-                  </div>
+                  <div className="mt-1 text-sm">assign/change: {permissionMode.canAssignOthers ? "TAK" : "NIE"} · edit existing: {permissionMode.canEditExisting ? "TAK" : "NIE"}</div>
                 </div>
 
                 {selectedTask.status !== "done" ? (
                   <div className="rounded-xl border p-3">
                     <div className="text-sm font-medium">Zamknij zadanie</div>
-                    <div className="mt-1 text-xs text-muted-foreground">
-                      Zamknięcie wymaga opisu wykonania. Bez tego historia byłaby tylko cyfrowym shruggem.
-                    </div>
-                    <textarea
-                      value={draftCompletion}
-                      onChange={(e) => setDraftCompletion(e.target.value)}
-                      rows={4}
-                      placeholder="Co zrobiono, jaki wynik, co zostawić dla kolejnych osób…"
-                      className="mt-3 w-full rounded-md border bg-background px-3 py-2 text-sm"
-                    />
+                    <div className="mt-1 text-xs text-muted-foreground">Zamknięcie wymaga opisu wykonania. Bez tego historia byłaby tylko cyfrowym shruggem.</div>
+                    <textarea value={draftCompletion} onChange={(e) => setDraftCompletion(e.target.value)} rows={4} placeholder="Co zrobiono, jaki wynik, co zostawić dla kolejnych osób…" className="mt-3 w-full rounded-md border bg-background px-3 py-2 text-sm" />
                     <button
                       type="button"
                       onClick={() => closeTask(selectedTask.id)}
@@ -599,11 +678,33 @@ export default function TasksPage() {
             )}
           </Card>
 
-          <Card title="Za chwilę podłączymy źródła" desc="To miejsce już jest gotowe konceptualnie na BOK, panel klienta i zlecenia od kierownika.">
+          <Card title="Wolne sloty widoczne dla klienta" desc="Klient nie ogląda kalendarza pracowników, tylko sloty policzone z okien, ekip i zajętości. To tutaj rodzi się mniej chaosu i mniej telefonu 'a dlaczego mi pokazali termin duch' .">
+            <div className="mb-3 flex flex-wrap items-center gap-2">
+              <select value={slotCategoryCode} onChange={(e) => setSlotCategoryCode(e.target.value as AutoTaskCode)} className="rounded-md border bg-background px-3 py-2 text-sm">
+                {autoCategories.filter((item) => item.clientBookable).map((category) => (
+                  <option key={category.id} value={category.code}>
+                    {category.name}
+                  </option>
+                ))}
+              </select>
+              <span className="text-xs text-muted-foreground">Źródłowe okna: {selectedAutoCategory.allowedWindowIds.join(", ")}</span>
+            </div>
+
             <div className="space-y-2 text-sm">
-              <div className="rounded-lg border p-3">BOK → terminy podłączeń i wizyt</div>
-              <div className="rounded-lg border p-3">Panel klienta → umówione terminy / zgłoszenia</div>
-              <div className="rounded-lg border p-3">Kierownik → zadania wewnętrzne i serwisowe</div>
+              {visibleSlots.length === 0 ? (
+                <div className="rounded-lg border border-dashed p-3 text-muted-foreground">Brak wolnych slotów dla tego dnia / kategorii. Mock już grzecznie pokazuje, kiedy układanka jest pełna.</div>
+              ) : (
+                visibleSlots.slice(0, 6).map((slot) => (
+                  <div key={slot.slotId} className="rounded-lg border p-3">
+                    <div className="font-medium">
+                      {formatDateTime(slot.startsAt)} → {formatTime(slot.endsAt)}
+                    </div>
+                    <div className="mt-1 text-xs text-muted-foreground">
+                      pozostała pojemność: {slot.remainingCapacity} · ekipy: {slot.eligibleTeamNames.join(", ")}
+                    </div>
+                  </div>
+                ))
+              )}
             </div>
           </Card>
         </div>

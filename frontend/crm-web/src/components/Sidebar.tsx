@@ -110,6 +110,11 @@ export function Sidebar() {
             ],
           },
           {
+            label: "Zadania",
+            href: "/config/tasks",
+            // UI-only: zespoły, okna, kategorie automatyczne, czas pracy
+          },
+          {
             label: "SMS",
             href: "/config/sms",
             requireAny: ["sms.config.read", "sms.config.write"],
