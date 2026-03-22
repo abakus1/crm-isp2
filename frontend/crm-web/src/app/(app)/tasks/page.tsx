@@ -174,21 +174,25 @@ function priorityLabel(priority: TaskPriority) {
       return "Wysoki";
     case "normal":
       return "Normalny";
-    default:
+    case "low":
       return "Niski";
+    default:
+      return priority;
   }
 }
 
 function statusLabel(status: TaskStatus) {
   switch (status) {
     case "planned":
-      return "Zaplanowane";
+      return "Planowane";
     case "in_progress":
-      return "W trakcie";
+      return "W toku";
     case "done":
       return "Zakończone";
-    default:
+    case "cancelled":
       return "Anulowane";
+    default:
+      return status;
   }
 }
 
