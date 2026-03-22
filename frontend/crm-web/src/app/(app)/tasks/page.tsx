@@ -166,6 +166,32 @@ function statusBadge(status: TaskStatus) {
   }
 }
 
+function priorityLabel(priority: TaskPriority) {
+  switch (priority) {
+    case "urgent":
+      return "Pilny";
+    case "high":
+      return "Wysoki";
+    case "normal":
+      return "Normalny";
+    default:
+      return "Niski";
+  }
+}
+
+function statusLabel(status: TaskStatus) {
+  switch (status) {
+    case "planned":
+      return "Zaplanowane";
+    case "in_progress":
+      return "W trakcie";
+    case "done":
+      return "Zakończone";
+    default:
+      return "Anulowane";
+  }
+}
+
 function isTaskOverdue(task: MockTask) {
   return task.status !== "done" && task.status !== "cancelled" && new Date(task.endAt).getTime() < VIEW_NOW.getTime();
 }
@@ -1121,8 +1147,8 @@ export default function TasksPage() {
                       ) : null}
                     </div>
                     <div className="flex flex-wrap gap-2">
-                      <span className={["inline-flex rounded-md border px-2 py-1 text-xs font-medium", priorityBadge(selectedTask.priority)].join(" ")}>{selectedTask.priority}</span>
-                      <span className={["inline-flex rounded-md border px-2 py-1 text-xs font-medium", statusBadge(selectedTask.status)].join(" ")}>{selectedTask.status}</span>
+                      <span className={["inline-flex rounded-md border px-2 py-1 text-xs font-medium", priorityBadge(selectedTask.priority)].join(" ")}>{priorityLabel(selectedTask.priority)}</span>
+                      <span className={["inline-flex rounded-md border px-2 py-1 text-xs font-medium", statusBadge(selectedTask.status)].join(" ")}>{statusLabel(selectedTask.status)}</span>
                     </div>
                   </div>
 
