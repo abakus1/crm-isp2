@@ -277,14 +277,17 @@ function getSubscriberDisplayName(s: SubscriberRecord) {
 
 function openSubscriberIssuePdf(args: {
   subscriber: SubscriberRecord;
+  deviceKind: string;
   deviceModel: string;
   serialNo: string;
+  mac?: string;
   ownership: "SPRZEDANY" | "WYPOZYCZENIE";
   issuedAtIso: string;
+  issueReason?: string;
 }) {
   if (typeof window === "undefined") return;
 
-  const issueType = args.ownership === "SPRZEDANY" ? "sprzedany" : "wypożyczony";
+  const issueType = args.ownership === "SPRZEDANY" ? "sprzedaż" : "wypożyczenie";
   const subscriberName = getSubscriberDisplayName(args.subscriber);
   const addressLine = [
     args.subscriber.addresses?.[0]?.street,
@@ -300,45 +303,173 @@ function openSubscriberIssuePdf(args: {
 <html lang="pl">
 <head>
   <meta charset="utf-8" />
-  <title>Dokument wydania sprzętu</title>
+  <title>Protokół wydania sprzętu</title>
   <style>
-    body { font-family: Arial, sans-serif; margin: 40px; color: #111; }
-    h1 { font-size: 22px; margin-bottom: 24px; }
-    .muted { color: #666; }
-    .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; margin-bottom: 24px; }
-    .box { border: 1px solid #d0d0d0; border-radius: 12px; padding: 16px; }
-    .label { font-size: 12px; color: #666; text-transform: uppercase; margin-bottom: 6px; }
-    .value { font-size: 15px; font-weight: 600; }
-    .footer { margin-top: 32px; font-size: 12px; color: #444; }
+    * { box-sizing: border-box; }
+    body { font-family: Arial, sans-serif; margin: 28px; color: #111; }
+    h1 { font-size: 24px; margin: 0 0 8px; }
+    h2 { font-size: 15px; margin: 0 0 12px; text-transform: uppercase; letter-spacing: 0.08em; color: #444; }
+    .topbar { display: flex; justify-content: space-between; gap: 20px; margin-bottom: 24px; }
+    .brand { font-size: 12px; color: #444; line-height: 1.5; }
+    .docno { text-align: right; font-size: 12px; color: #444; }
+    .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-bottom: 18px; }
+    .box { border: 1px solid #cfcfcf; border-radius: 12px; padding: 14px; }
+    .row { display: flex; justify-content: space-between; gap: 16px; padding: 6px 0; border-bottom: 1px solid #ececec; }
+    .row:last-child { border-bottom: 0; }
+    .label { font-size: 12px; color: #666; }
+    .value { font-size: 14px; font-weight: 600; text-align: right; }
+    .note { min-height: 88px; white-space: pre-wrap; }
+    .footer { margin-top: 24px; font-size: 12px; color: #444; }
+    .signatures { display: grid; grid-template-columns: 1fr 1fr; gap: 24px; margin-top: 42px; }
+    .sign { border-top: 1px solid #777; padding-top: 8px; font-size: 12px; color: #444; text-align: center; }
   </style>
 </head>
 <body>
-  <h1>Dokument wydania sprzętu</h1>
+  <div class="topbar">
+    <div>
+      <h1>Protokół wydania sprzętu</h1>
+      <div class="brand">Gemini Internet sp. z o.o.<br />Dokument generowany z kartoteki abonenta</div>
+    </div>
+    <div class="docno">
+      <div>Data dokumentu: <strong>${escapeHtml(formatDateOnly(args.issuedAtIso))}</strong></div>
+      <div>Rodzaj wydania: <strong>${escapeHtml(issueType)}</strong></div>
+    </div>
+  </div>
+
   <div class="grid">
     <div class="box">
-      <div class="label">Klient</div>
-      <div class="value">${escapeHtml(subscriberName)}</div>
-      <div class="muted">${escapeHtml(args.subscriber.phone || "Brak telefonu")}</div>
-      <div class="muted">${escapeHtml(args.subscriber.email || "Brak e-mail")}</div>
-      <div class="muted">${escapeHtml(addressLine || "Brak adresu")}</div>
-      <div class="muted">${escapeHtml(cityLine || "")}</div>
+      <h2>Abonent</h2>
+      <div class="row"><div class="label">Nazwa / imię i nazwisko</div><div class="value">${escapeHtml(subscriberName)}</div></div>
+      <div class="row"><div class="label">Telefon</div><div class="value">${escapeHtml(args.subscriber.phone || "Brak")}</div></div>
+      <div class="row"><div class="label">E-mail</div><div class="value">${escapeHtml(args.subscriber.email || "Brak")}</div></div>
+      <div class="row"><div class="label">Adres</div><div class="value">${escapeHtml(addressLine || "Brak adresu")}</div></div>
+      <div class="row"><div class="label">Miasto</div><div class="value">${escapeHtml(cityLine || "Brak")}</div></div>
     </div>
     <div class="box">
-      <div class="label">Wydanie</div>
-      <div class="value">${escapeHtml(formatDateOnly(args.issuedAtIso))}</div>
-      <div class="muted">Tryb: ${escapeHtml(issueType)}</div>
+      <h2>Sprzęt</h2>
+      <div class="row"><div class="label">Typ urządzenia</div><div class="value">${escapeHtml(args.deviceKind)}</div></div>
+      <div class="row"><div class="label">Model</div><div class="value">${escapeHtml(args.deviceModel)}</div></div>
+      <div class="row"><div class="label">Numer seryjny</div><div class="value">${escapeHtml(args.serialNo)}</div></div>
+      <div class="row"><div class="label">MAC</div><div class="value">${escapeHtml(args.mac || "—")}</div></div>
+      <div class="row"><div class="label">Tryb przekazania</div><div class="value">${escapeHtml(issueType)}</div></div>
     </div>
   </div>
 
   <div class="box">
-    <div class="label">Urządzenie</div>
-    <div class="value">${escapeHtml(args.deviceModel)}</div>
-    <div class="muted">Numer seryjny: ${escapeHtml(args.serialNo)}</div>
-    <div class="muted">Status dokumentu: ${escapeHtml(issueType)}</div>
+    <h2>Powód wydania</h2>
+    <div class="note">${escapeHtml(args.issueReason?.trim() || "—")}</div>
   </div>
 
   <div class="footer">
-    Dokument mock / UI preview. W docelowej wersji backend wygeneruje finalny PDF z numerem dokumentu, operatorem i podpisami.
+    Dokument przygotowany do zapisu jako PDF z poziomu przeglądarki. W docelowym backendzie można nadać numer dokumentu, dodać operatora prowadzącego i podpis elektroniczny.
+  </div>
+
+  <div class="signatures">
+    <div class="sign">Podpis osoby wydającej</div>
+    <div class="sign">Podpis abonenta / odbierającego</div>
+  </div>
+
+  <script>window.onload = () => window.print();</script>
+</body>
+</html>`;
+
+  popup.document.open();
+  popup.document.write(html);
+  popup.document.close();
+}
+
+function openSubscriberReturnPdf(args: {
+  subscriber: SubscriberRecord;
+  deviceKind: string;
+  deviceModel: string;
+  serialNo: string;
+  mac?: string;
+  ownership: "SPRZEDANY" | "WYPOZYCZENIE";
+  returnedAtIso: string;
+  returnCondition: DeviceCondition;
+  returnReason?: string;
+}) {
+  if (typeof window === "undefined") return;
+
+  const subscriberName = getSubscriberDisplayName(args.subscriber);
+  const addressLine = [
+    args.subscriber.addresses?.[0]?.street,
+    args.subscriber.addresses?.[0]?.building_no,
+    args.subscriber.addresses?.[0]?.apartment_no ? `/${args.subscriber.addresses?.[0]?.apartment_no}` : "",
+  ].filter(Boolean).join(" ");
+  const cityLine = [args.subscriber.addresses?.[0]?.postal_code, args.subscriber.addresses?.[0]?.city].filter(Boolean).join(" ");
+
+  const popup = window.open("", "_blank", "noopener,noreferrer,width=900,height=700");
+  if (!popup) return;
+
+  const html = `<!doctype html>
+<html lang="pl">
+<head>
+  <meta charset="utf-8" />
+  <title>Protokół zwrotu sprzętu</title>
+  <style>
+    * { box-sizing: border-box; }
+    body { font-family: Arial, sans-serif; margin: 28px; color: #111; }
+    h1 { font-size: 24px; margin: 0 0 8px; }
+    h2 { font-size: 15px; margin: 0 0 12px; text-transform: uppercase; letter-spacing: 0.08em; color: #444; }
+    .topbar { display: flex; justify-content: space-between; gap: 20px; margin-bottom: 24px; }
+    .brand { font-size: 12px; color: #444; line-height: 1.5; }
+    .docno { text-align: right; font-size: 12px; color: #444; }
+    .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-bottom: 18px; }
+    .box { border: 1px solid #cfcfcf; border-radius: 12px; padding: 14px; }
+    .row { display: flex; justify-content: space-between; gap: 16px; padding: 6px 0; border-bottom: 1px solid #ececec; }
+    .row:last-child { border-bottom: 0; }
+    .label { font-size: 12px; color: #666; }
+    .value { font-size: 14px; font-weight: 600; text-align: right; }
+    .note { min-height: 88px; white-space: pre-wrap; }
+    .footer { margin-top: 24px; font-size: 12px; color: #444; }
+    .signatures { display: grid; grid-template-columns: 1fr 1fr; gap: 24px; margin-top: 42px; }
+    .sign { border-top: 1px solid #777; padding-top: 8px; font-size: 12px; color: #444; text-align: center; }
+  </style>
+</head>
+<body>
+  <div class="topbar">
+    <div>
+      <h1>Protokół zwrotu sprzętu</h1>
+      <div class="brand">Gemini Internet sp. z o.o.<br />Dokument generowany z kartoteki abonenta</div>
+    </div>
+    <div class="docno">
+      <div>Data dokumentu: <strong>${escapeHtml(formatDateOnly(args.returnedAtIso))}</strong></div>
+      <div>Poprzedni tryb: <strong>${escapeHtml(args.ownership === "SPRZEDANY" ? "sprzedaż" : "wypożyczenie")}</strong></div>
+    </div>
+  </div>
+
+  <div class="grid">
+    <div class="box">
+      <h2>Abonent</h2>
+      <div class="row"><div class="label">Nazwa / imię i nazwisko</div><div class="value">${escapeHtml(subscriberName)}</div></div>
+      <div class="row"><div class="label">Telefon</div><div class="value">${escapeHtml(args.subscriber.phone || "Brak")}</div></div>
+      <div class="row"><div class="label">E-mail</div><div class="value">${escapeHtml(args.subscriber.email || "Brak")}</div></div>
+      <div class="row"><div class="label">Adres</div><div class="value">${escapeHtml(addressLine || "Brak adresu")}</div></div>
+      <div class="row"><div class="label">Miasto</div><div class="value">${escapeHtml(cityLine || "Brak")}</div></div>
+    </div>
+    <div class="box">
+      <h2>Sprzęt</h2>
+      <div class="row"><div class="label">Typ urządzenia</div><div class="value">${escapeHtml(args.deviceKind)}</div></div>
+      <div class="row"><div class="label">Model</div><div class="value">${escapeHtml(args.deviceModel)}</div></div>
+      <div class="row"><div class="label">Numer seryjny</div><div class="value">${escapeHtml(args.serialNo)}</div></div>
+      <div class="row"><div class="label">MAC</div><div class="value">${escapeHtml(args.mac || "—")}</div></div>
+      <div class="row"><div class="label">Stan przy zwrocie</div><div class="value">${escapeHtml(prettyCondition(args.returnCondition))}</div></div>
+    </div>
+  </div>
+
+  <div class="box">
+    <h2>Powód zwrotu</h2>
+    <div class="note">${escapeHtml(args.returnReason?.trim() || "—")}</div>
+  </div>
+
+  <div class="footer">
+    Dokument przygotowany do zapisu jako PDF z poziomu przeglądarki. W docelowym backendzie można nadać numer dokumentu, dodać status weryfikacji technicznej i podpis elektroniczny.
+  </div>
+
+  <div class="signatures">
+    <div class="sign">Podpis osoby przyjmującej</div>
+    <div class="sign">Podpis abonenta / zwracającego</div>
   </div>
 
   <script>window.onload = () => window.print();</script>
@@ -423,6 +554,7 @@ function SubscriberOnt({ s }: { s: SubscriberRecord }) {
           </div>
         </div>
       </Card>
+
     </div>
   );
 }
@@ -431,9 +563,13 @@ function SubscriberEquipment({ s }: { s: SubscriberRecord }) {
   const inventory = useInventorySnapshot();
   const [issueDeviceId, setIssueDeviceId] = useState("");
   const [issueOwnership, setIssueOwnership] = useState<"SPRZEDANY" | "WYPOZYCZENIE">("WYPOZYCZENIE");
-  const [issueReason, setIssueReason] = useState("Wydanie sprzętu na kartotece abonenta");
+  const [issueReason, setIssueReason] = useState("");
   const [returnReasonById, setReturnReasonById] = useState<Record<string, string>>({});
   const [returnConditionById, setReturnConditionById] = useState<Record<string, DeviceCondition>>({});
+  const [confirmIssueOpen, setConfirmIssueOpen] = useState(false);
+  const [confirmReturnDeviceId, setConfirmReturnDeviceId] = useState<string | null>(null);
+  const [lastIssueDeviceId, setLastIssueDeviceId] = useState<string | null>(null);
+  const [lastReturnDeviceId, setLastReturnDeviceId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
 
@@ -451,15 +587,18 @@ function SubscriberEquipment({ s }: { s: SubscriberRecord }) {
     setSuccess(null);
     try {
       if (!issueDeviceId) throw new Error("Wybierz urządzenie do wydania");
+      if (!issueReason.trim()) throw new Error("Opis wydania nie może być pusty");
       issueDeviceToSubscriber({
         subscriberId: s.id,
         deviceId: issueDeviceId,
         ownership: issueOwnership,
         reason: issueReason,
       });
-      setSuccess("Sprzęt został wydany z magazynu na kartotece abonenta. Możesz od razu otworzyć dokument wydania PDF.");
-      setIssueReason("Wydanie sprzętu na kartotece abonenta");
+      setLastIssueDeviceId(issueDeviceId);
+      setSuccess("Sprzęt został wydany z magazynu na kartotece abonenta. Możesz od razu zapisać protokół jako PDF.");
+      setIssueReason("");
       setIssueDeviceId("");
+      setConfirmIssueOpen(false);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Nie udało się wydać sprzętu.");
     }
@@ -469,13 +608,18 @@ function SubscriberEquipment({ s }: { s: SubscriberRecord }) {
     setError(null);
     setSuccess(null);
     try {
+      const reason = (returnReasonById[deviceId] ?? "").trim();
+      if (!reason) throw new Error("Opis zwrotu nie może być pusty");
       returnDeviceFromSubscriber({
         subscriberId: s.id,
         deviceId,
         condition: returnConditionById[deviceId] ?? "SPRAWNY",
-        reason: returnReasonById[deviceId] || "Zwrot sprzętu z kartoteki abonenta",
+        reason,
       });
-      setSuccess("Sprzęt został zwrócony na magazyn z określeniem stanu.");
+      setLastReturnDeviceId(deviceId);
+      setReturnReasonById((prev) => ({ ...prev, [deviceId]: "" }));
+      setConfirmReturnDeviceId(null);
+      setSuccess("Sprzęt został zwrócony na magazyn z określeniem stanu. Możesz od razu zapisać protokół zwrotu jako PDF.");
     } catch (err) {
       setError(err instanceof Error ? err.message : "Nie udało się zwrócić sprzętu.");
     }
@@ -524,15 +668,39 @@ function SubscriberEquipment({ s }: { s: SubscriberRecord }) {
                           onClick={() =>
                             openSubscriberIssuePdf({
                               subscriber: s,
+                              deviceKind: prettyKind(device.kind),
                               deviceModel: device.model,
                               serialNo: device.serialNo,
+                              mac: device.mac,
                               ownership: assignment.ownership,
                               issuedAtIso: assignment.issuedAtIso,
+                              issueReason: assignment.issueReason,
                             })
                           }
                           className="rounded-md border px-3 py-1.5 text-xs hover:bg-muted/40"
                         >
                           Dokument wydania PDF
+                        </button>
+                      ) : null}
+                      {assignment.returnAtIso && device ? (
+                        <button
+                          type="button"
+                          onClick={() =>
+                            openSubscriberReturnPdf({
+                              subscriber: s,
+                              deviceKind: prettyKind(device.kind),
+                              deviceModel: device.model,
+                              serialNo: device.serialNo,
+                              mac: device.mac,
+                              ownership: assignment.ownership,
+                              returnedAtIso: assignment.returnAtIso,
+                              returnCondition: assignment.returnCondition ?? device.condition,
+                              returnReason: assignment.returnReason,
+                            })
+                          }
+                          className="rounded-md border px-3 py-1.5 text-xs hover:bg-muted/40"
+                        >
+                          Dokument zwrotu PDF
                         </button>
                       ) : null}
                     </div>
@@ -561,7 +729,7 @@ function SubscriberEquipment({ s }: { s: SubscriberRecord }) {
                           </select>
                         </div>
                         <div className="flex items-end">
-                          <button type="button" onClick={() => handleReturn(device!.id)} className="w-full rounded-md border px-3 py-2 text-sm hover:bg-muted/40">
+                          <button type="button" onClick={() => setConfirmReturnDeviceId(device!.id)} className="w-full rounded-md border px-3 py-2 text-sm hover:bg-muted/40">
                             Zwrot na magazyn
                           </button>
                         </div>
@@ -570,9 +738,10 @@ function SubscriberEquipment({ s }: { s: SubscriberRecord }) {
                         <div className="mb-1 text-xs text-muted-foreground">Opis zwrotu</div>
                         <textarea
                           rows={2}
-                          value={returnReasonById[device!.id] ?? "Zwrot sprzętu z kartoteki abonenta"}
+                          value={returnReasonById[device!.id] ?? ""}
                           onChange={(event) => setReturnReasonById((prev) => ({ ...prev, [device!.id]: event.target.value }))}
                           className="w-full rounded-md border border-border bg-background px-3 py-2 text-sm"
+                          placeholder="Opisz powód zwrotu sprzętu"
                         />
                       </div>
                     </div>
@@ -617,14 +786,73 @@ function SubscriberEquipment({ s }: { s: SubscriberRecord }) {
             </div>
             <div>
               <div className="mb-1 text-xs text-muted-foreground">Opis wydania</div>
-              <textarea rows={3} value={issueReason} onChange={(event) => setIssueReason(event.target.value)} className="w-full rounded-md border border-border bg-background px-3 py-2 text-sm" />
+              <textarea rows={3} value={issueReason} onChange={(event) => setIssueReason(event.target.value)} placeholder="Opisz powód wydania sprzętu" className="w-full rounded-md border border-border bg-background px-3 py-2 text-sm" />
             </div>
-            <button type="button" onClick={handleIssue} className="w-full rounded-md border px-3 py-2 text-sm hover:bg-muted/40">
+            <button type="button" onClick={() => setConfirmIssueOpen(true)} className="w-full rounded-md border px-3 py-2 text-sm hover:bg-muted/40">
               Wydaj sprzęt do abonenta
             </button>
 
             {error ? <div className="rounded-lg border border-red-500/30 bg-red-500/10 px-3 py-2 text-sm text-red-700 dark:text-red-300">{error}</div> : null}
             {success ? <div className="rounded-lg border border-emerald-500/30 bg-emerald-500/10 px-3 py-2 text-sm text-emerald-700 dark:text-emerald-300">{success}</div> : null}
+
+            {lastIssueDeviceId ? (() => {
+              const assignment = getDeviceAssignmentsForSubscriber(s.id).find((row) => row.device?.id === lastIssueDeviceId && !row.assignment.returnAtIso);
+              if (!assignment?.device) return null;
+              return (
+                <div className="rounded-lg border bg-muted/20 p-3 text-sm">
+                  <div className="font-medium">Ostatnio wydany sprzęt</div>
+                  <div className="mt-1 text-muted-foreground">{assignment.device.model} • SN: {assignment.device.serialNo}</div>
+                  <button
+                    type="button"
+                    onClick={() =>
+                      openSubscriberIssuePdf({
+                        subscriber: s,
+                        deviceKind: prettyKind(assignment.device.kind),
+                        deviceModel: assignment.device.model,
+                        serialNo: assignment.device.serialNo,
+                        mac: assignment.device.mac,
+                        ownership: assignment.assignment.ownership,
+                        issuedAtIso: assignment.assignment.issuedAtIso,
+                        issueReason: assignment.assignment.issueReason,
+                      })
+                    }
+                    className="mt-3 rounded-md border px-3 py-2 text-sm hover:bg-muted/40"
+                  >
+                    Otwórz ostatni dokument wydania PDF
+                  </button>
+                </div>
+              );
+            })() : null}
+
+            {lastReturnDeviceId ? (() => {
+              const assignment = getDeviceAssignmentsForSubscriber(s.id).find((row) => row.device?.id === lastReturnDeviceId && !!row.assignment.returnAtIso);
+              if (!assignment?.device || !assignment.assignment.returnAtIso) return null;
+              return (
+                <div className="rounded-lg border bg-muted/20 p-3 text-sm">
+                  <div className="font-medium">Ostatnio zwrócony sprzęt</div>
+                  <div className="mt-1 text-muted-foreground">{assignment.device.model} • SN: {assignment.device.serialNo}</div>
+                  <button
+                    type="button"
+                    onClick={() =>
+                      openSubscriberReturnPdf({
+                        subscriber: s,
+                        deviceKind: prettyKind(assignment.device.kind),
+                        deviceModel: assignment.device.model,
+                        serialNo: assignment.device.serialNo,
+                        mac: assignment.device.mac,
+                        ownership: assignment.assignment.ownership,
+                        returnedAtIso: assignment.assignment.returnAtIso,
+                        returnCondition: assignment.assignment.returnCondition ?? assignment.device.condition,
+                        returnReason: assignment.assignment.returnReason,
+                      })
+                    }
+                    className="mt-3 rounded-md border px-3 py-2 text-sm hover:bg-muted/40"
+                  >
+                    Otwórz ostatni dokument zwrotu PDF
+                  </button>
+                </div>
+              );
+            })() : null}
 
             <div className="rounded-xl border bg-muted/20 p-3 text-xs text-muted-foreground">
               Magazyn zostaje miejscem tylko dla ruchu wewnętrznego: magazyn ↔ serwis ↔ wysłany naprawa.
@@ -646,9 +874,30 @@ function SubscriberEquipment({ s }: { s: SubscriberRecord }) {
                     <div className="text-sm font-semibold">{device?.model ?? "Nieznane urządzenie"}</div>
                     <div className="mt-1 text-xs text-muted-foreground">{prettyKind(device?.kind ?? "INNY")} • SN: {device?.serialNo ?? "—"}</div>
                   </div>
-                  <div className="flex flex-wrap gap-2">
+                  <div className="flex flex-wrap items-center gap-2">
                     <EquipmentBadge value={assignment.ownership} />
                     <EquipmentBadge value={assignment.returnCondition ?? device?.condition ?? "SPRAWNY"} />
+                    {assignment.returnAtIso && device ? (
+                      <button
+                        type="button"
+                        onClick={() =>
+                          openSubscriberReturnPdf({
+                            subscriber: s,
+                            deviceKind: prettyKind(device.kind),
+                            deviceModel: device.model,
+                            serialNo: device.serialNo,
+                            mac: device.mac,
+                            ownership: assignment.ownership,
+                            returnedAtIso: assignment.returnAtIso,
+                            returnCondition: assignment.returnCondition ?? device.condition,
+                            returnReason: assignment.returnReason,
+                          })
+                        }
+                        className="rounded-md border px-3 py-1.5 text-xs hover:bg-muted/40"
+                      >
+                        Dokument zwrotu PDF
+                      </button>
+                    ) : null}
                   </div>
                 </div>
                 <div className="mt-3 grid grid-cols-1 gap-3 lg:grid-cols-2">
@@ -667,6 +916,63 @@ function SubscriberEquipment({ s }: { s: SubscriberRecord }) {
           </div>
         )}
       </Card>
+
+      <SimpleModal
+        open={confirmIssueOpen}
+        onClose={() => setConfirmIssueOpen(false)}
+        title="Potwierdzenie wydania sprzętu"
+        description={`Jesteś pewien, że chcesz wydać sprzęt na rzecz klienta ${getSubscriberDisplayName(s)}?`}
+        footer={
+          <div className="flex flex-wrap justify-end gap-2">
+            <button type="button" onClick={() => setConfirmIssueOpen(false)} className="rounded-md border px-3 py-2 text-sm hover:bg-muted/40">Anuluj</button>
+            <button type="button" onClick={handleIssue} className="rounded-md border px-3 py-2 text-sm hover:bg-muted/40">Potwierdź wydanie</button>
+          </div>
+        }
+      >
+        <div className="rounded-lg border bg-muted/20 p-3 text-sm">
+          <div><span className="text-muted-foreground">Abonent:</span> {getSubscriberDisplayName(s)}</div>
+          <div className="mt-1"><span className="text-muted-foreground">Sprzęt:</span> {availableDevices.find((device) => device.id === issueDeviceId)?.model ?? "—"}</div>
+          <div className="mt-1"><span className="text-muted-foreground">Numer seryjny:</span> {availableDevices.find((device) => device.id === issueDeviceId)?.serialNo ?? "—"}</div>
+          <div className="mt-1"><span className="text-muted-foreground">Tryb:</span> {issueOwnership === "SPRZEDANY" ? "sprzedany" : "wypożyczenie"}</div>
+        </div>
+        {!issueReason.trim() ? (
+          <div className="rounded-lg border border-red-500/30 bg-red-500/10 px-3 py-2 text-sm text-red-700 dark:text-red-300">
+            Opis wydania nie może być pusty. Dzięki temu nie wyślemy w obieg domyślnej papki.
+          </div>
+        ) : null}
+      </SimpleModal>
+
+      <SimpleModal
+        open={confirmReturnDeviceId != null}
+        onClose={() => setConfirmReturnDeviceId(null)}
+        title="Potwierdzenie zwrotu sprzętu"
+        description={`Jesteś pewien, że chcesz przyjąć zwrot sprzętu od klienta ${getSubscriberDisplayName(s)}?`}
+        footer={
+          <div className="flex flex-wrap justify-end gap-2">
+            <button type="button" onClick={() => setConfirmReturnDeviceId(null)} className="rounded-md border px-3 py-2 text-sm hover:bg-muted/40">Anuluj</button>
+            <button type="button" onClick={() => confirmReturnDeviceId && handleReturn(confirmReturnDeviceId)} className="rounded-md border px-3 py-2 text-sm hover:bg-muted/40">Potwierdź zwrot</button>
+          </div>
+        }
+      >
+        {(() => {
+          const device = activeAssignments.find((row) => row.device?.id === confirmReturnDeviceId)?.device;
+          return (
+            <div className="space-y-3">
+              <div className="rounded-lg border bg-muted/20 p-3 text-sm">
+                <div><span className="text-muted-foreground">Abonent:</span> {getSubscriberDisplayName(s)}</div>
+                <div className="mt-1"><span className="text-muted-foreground">Sprzęt:</span> {device?.model ?? "—"}</div>
+                <div className="mt-1"><span className="text-muted-foreground">Numer seryjny:</span> {device?.serialNo ?? "—"}</div>
+                <div className="mt-1"><span className="text-muted-foreground">Stan po zwrocie:</span> {prettyCondition(returnConditionById[confirmReturnDeviceId ?? ""] ?? "SPRAWNY")}</div>
+              </div>
+              {!((returnReasonById[confirmReturnDeviceId ?? ""] ?? "").trim()) ? (
+                <div className="rounded-lg border border-red-500/30 bg-red-500/10 px-3 py-2 text-sm text-red-700 dark:text-red-300">
+                  Opis zwrotu nie może być pusty. Bez tego papierologia znowu zrobi salto.
+                </div>
+              ) : null}
+            </div>
+          );
+        })()}
+      </SimpleModal>
     </div>
   );
 }
