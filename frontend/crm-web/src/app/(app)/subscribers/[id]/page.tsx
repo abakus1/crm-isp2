@@ -534,13 +534,17 @@ function SubscriberOnt({ s }: { s: SubscriberRecord }) {
         <div className="grid grid-cols-1 gap-4 xl:grid-cols-2">
           {onts.map((ont) => {
             const telemetry = ont.telemetry;
+
             return (
               <div key={ont.assignment.id} className="rounded-xl border p-4">
                 <div className="flex flex-wrap items-start justify-between gap-3">
                   <div>
                     <div className="text-sm font-semibold">{ont.device.model}</div>
-                    <div className="mt-1 text-xs text-muted-foreground">SN: {ont.device.serialNo} • MAC: {ont.device.mac ?? "—"}</div>
+                    <div className="mt-1 text-xs text-muted-foreground">
+                      SN: {ont.device.serialNo} • MAC: {ont.device.mac ?? "—"}
+                    </div>
                   </div>
+
                   <div className="flex flex-wrap gap-2">
                     <EquipmentBadge value={telemetry?.enabled ? "WŁĄCZONY" : "WYŁĄCZONY"} />
                     <EquipmentBadge value={ont.assignment.ownership} />
@@ -550,13 +554,22 @@ function SubscriberOnt({ s }: { s: SubscriberRecord }) {
                 <div className="mt-4 grid grid-cols-1 gap-3 md:grid-cols-2">
                   <div className="rounded-xl border bg-muted/20 p-3">
                     <div className="text-xs text-muted-foreground">Status urządzenia</div>
-                    <div className="mt-2 text-xl font-semibold">{telemetry?.enabled ? "Włączony" : "Wyłączony"}</div>
-                    <div className="mt-1 text-xs text-muted-foreground">Ostatni odczyt: {formatDateTime(telemetry?.lastSeenAtIso)}</div>
+                    <div className="mt-2 text-xl font-semibold">
+                      {telemetry?.enabled ? "Włączony" : "Wyłączony"}
+                    </div>
+                    <div className="mt-1 text-xs text-muted-foreground">
+                      Ostatni odczyt: {formatDateTime(telemetry?.lastSeenAtIso)}
+                    </div>
                   </div>
+
                   <div className="rounded-xl border bg-muted/20 p-3">
                     <div className="text-xs text-muted-foreground">Aktualny profil</div>
-                    <div className="mt-2 text-xl font-semibold">{telemetry?.profileName ?? "Do konfiguracji"}</div>
-                    <div className="mt-1 text-xs text-muted-foreground">Moc sygnału: {telemetry?.signalPowerDbm ?? "brak odczytu"}</div>
+                    <div className="mt-2 text-xl font-semibold">
+                      {telemetry?.profileName ?? "Do konfiguracji"}
+                    </div>
+                    <div className="mt-1 text-xs text-muted-foreground">
+                      Moc sygnału: {telemetry?.signalPowerDbm ?? "brak odczytu"}
+                    </div>
                   </div>
                 </div>
 
@@ -572,25 +585,58 @@ function SubscriberOnt({ s }: { s: SubscriberRecord }) {
                   <KV k="Ostatni powód wyłączenia" v={telemetry?.lastDisableReason ?? "Brak"} />
                 </div>
 
-                <div className="mt-4 flex flex-wrap gap-2">
-                  {ont.assignment.managementNetworkId ? (
-                    <Link
-                      href={`/config/ip/addresses?networkId=${encodeURIComponent(ont.assignment.managementNetworkId)}`}
+                <div className="mt-4 rounded-xl border bg-muted/20 p-3">
+                  <div className="text-xs text-muted-foreground">Szybkie akcje</div>
+
+                  <div className="mt-2 flex flex-wrap gap-2">
+                    {ont.assignment.managementNetworkId ? (
+                      <Link
+                        href={`/config/ip/addresses?networkId=${encodeURIComponent(ont.assignment.managementNetworkId)}`}
+                        className="rounded-md border px-3 py-2 text-sm hover:bg-muted/40"
+                      >
+                        Otwórz sieć zarządzania
+                      </Link>
+                    ) : null}
+
+                    {ont.assignment.managementIp ? (
+                      <a
+                        href={makeOntHttpLink(ont.assignment.managementIp)}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="rounded-md border px-3 py-2 text-sm hover:bg-muted/40"
+                      >
+                        Otwórz ONT: http://{ont.assignment.managementIp}
+                      </a>
+                    ) : null}
+
+                    <button
+                      type="button"
                       className="rounded-md border px-3 py-2 text-sm hover:bg-muted/40"
                     >
-                      Otwórz sieć zarządzania
-                    </Link>
-                  ) : null}
-                  {ont.assignment.managementIp ? (
-                    <a
-                      href={makeOntHttpLink(ont.assignment.managementIp)}
-                      target="_blank"
-                      rel="noreferrer"
+                      Odśwież parametry
+                    </button>
+
+                    <button
+                      type="button"
                       className="rounded-md border px-3 py-2 text-sm hover:bg-muted/40"
                     >
-                      Otwórz ONT: http://{ont.assignment.managementIp}
-                    </a>
-                  ) : null}
+                      Zmień profil
+                    </button>
+
+                    <button
+                      type="button"
+                      className="rounded-md border px-3 py-2 text-sm hover:bg-muted/40"
+                    >
+                      Wyłącz ONT
+                    </button>
+
+                    <button
+                      type="button"
+                      className="rounded-md border px-3 py-2 text-sm hover:bg-muted/40"
+                    >
+                      Włącz ONT
+                    </button>
+                  </div>
                 </div>
               </div>
             );
@@ -602,25 +648,14 @@ function SubscriberOnt({ s }: { s: SubscriberRecord }) {
         title="Provisioning / diagnostyka"
         desc="UI mock pod przyszłe odczyty z GPON/OLT. Na razie pokazujemy docelowe pola, żeby backend wiedział, do czego ma dorosnąć bez freestyle’u."
       >
-        <div className="space-y-3">
-          <div className="rounded-xl border bg-muted/20 p-3">
-            <div className="text-xs text-muted-foreground">Planowane akcje</div>
-            <ul className="mt-2 space-y-2 text-sm">
-              <li>• odczyt statusu ONT z OLT / ACS</li>
-              <li>• ustawienie / zmiana profilu usługi</li>
-              <li>• odczyt mocy sygnału i alarmów</li>
-              <li>• zapis ostatniego powodu wyłączenia</li>
-            </ul>
-          </div>
-          <div className="rounded-xl border bg-muted/20 p-3">
-            <div className="text-xs text-muted-foreground">Placeholder akcji</div>
-            <div className="mt-2 grid grid-cols-1 gap-2 md:grid-cols-2 xl:grid-cols-4">
-              <button type="button" className="rounded-md border px-3 py-2 text-sm hover:bg-muted/40">Odśwież parametry</button>
-              <button type="button" className="rounded-md border px-3 py-2 text-sm hover:bg-muted/40">Zmień profil</button>
-              <button type="button" className="rounded-md border px-3 py-2 text-sm hover:bg-muted/40">Wyłącz ONT</button>
-              <button type="button" className="rounded-md border px-3 py-2 text-sm hover:bg-muted/40">Włącz ONT</button>
-            </div>
-          </div>
+        <div className="rounded-xl border bg-muted/20 p-3">
+          <div className="text-xs text-muted-foreground">Planowane akcje</div>
+          <ul className="mt-2 space-y-2 text-sm">
+            <li>• odczyt statusu ONT z OLT / ACS</li>
+            <li>• ustawienie / zmiana profilu usługi</li>
+            <li>• odczyt mocy sygnału i alarmów</li>
+            <li>• zapis ostatniego powodu wyłączenia</li>
+          </ul>
         </div>
       </Card>
     </div>
