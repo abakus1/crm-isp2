@@ -65,6 +65,7 @@ export type SubscriberDeviceAssignment = {
   issuedBy: string;
   issueReason: string;
   issueAddressText?: string;
+  issueAddressLocal?: string;
   managementIpAddressId?: string;
   managementIp?: string;
   managementNetworkId?: string;
@@ -221,7 +222,8 @@ function seedState(): InventoryState {
       issuedAtIso: "2026-02-10T12:00:00.000Z",
       issuedBy: DEFAULT_ACTOR,
       issueReason: "Wydanie ONT do instalacji FTTH",
-      issueAddressText: "Kraków, ul. Promienistych 11/4",
+      issueAddressText: "Kraków, ul. Promienistych 11",
+      issueAddressLocal: "4",
       managementIpAddressId: "seed-ip-10-10-0-10",
       managementIp: "10.10.0.10",
       managementNetworkCidr: "10.10.0.0/24",
@@ -480,11 +482,13 @@ export function issueDeviceToSubscriber(args: {
   ownership: SubscriberDeviceOwnership;
   reason: string;
   issueAddressText: string;
+  issueAddressLocal?: string;
   managementIpAddressId: string;
   actor?: string;
 }) {
   const reason = args.reason?.trim();
   const issueAddressText = args.issueAddressText?.trim();
+  const issueAddressLocal = args.issueAddressLocal?.trim();
   if (!reason) throw new Error("Powód wydania jest wymagany");
   if (!issueAddressText) throw new Error("Adres wydania z PRG jest wymagany");
   if (!args.managementIpAddressId) throw new Error("Adres IP zarządzania jest wymagany");
@@ -521,6 +525,7 @@ export function issueDeviceToSubscriber(args: {
     issuedBy: args.actor ?? DEFAULT_ACTOR,
     issueReason: reason,
     issueAddressText,
+    issueAddressLocal: issueAddressLocal || undefined,
     managementIpAddressId: args.managementIpAddressId,
     managementIp: managementAddress.ip,
     managementNetworkId: managementAddress.networkId,
@@ -556,7 +561,13 @@ export function issueDeviceToSubscriber(args: {
       actor: assignment.issuedBy,
       before: { status: before.status },
       after: { status: "KLIENT" },
-      meta: { subscriberId: args.subscriberId, ownership: args.ownership, issueAddressText, managementIp: managementAddress.ip },
+      meta: {
+        subscriberId: args.subscriberId,
+        ownership: args.ownership,
+        issueAddressText,
+        issueAddressLocal: issueAddressLocal || undefined,
+        managementIp: managementAddress.ip,
+      },
     }),
   };
 

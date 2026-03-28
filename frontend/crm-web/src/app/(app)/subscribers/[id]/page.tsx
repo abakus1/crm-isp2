@@ -260,9 +260,14 @@ function useIpamSnapshot() {
   return useSyncExternalStore(subscribeIpam, getIpamState, getIpamState);
 }
 
-function formatPrgAddressText(pick: PrgAddressPick | null | undefined) {
+function formatPrgAddressText(pick: PrgAddressPick | null | undefined, local?: string | null) {
   if (!pick) return "";
-  return [pick.place_name, `ul. ${pick.street_name}`, pick.building_no].filter(Boolean).join(", ");
+  const normalizedLocal = (local || "").trim();
+  return [
+    pick.place_name,
+    `ul. ${pick.street_name}`,
+    normalizedLocal ? `${pick.building_no}/${normalizedLocal}` : pick.building_no,
+  ].filter(Boolean).join(", ");
 }
 
 function makeOntHttpLink(ip?: string) {
@@ -300,6 +305,7 @@ function openSubscriberIssuePdf(args: {
   issuedAtIso: string;
   issueReason?: string;
   issueAddressText?: string;
+  issueAddressLocal?: string;
   managementIp?: string;
   managementNetworkCidr?: string;
 }) {
@@ -371,6 +377,7 @@ function openSubscriberIssuePdf(args: {
       <div class="row"><div class="label">MAC</div><div class="value">${escapeHtml(args.mac || "—")}</div></div>
       <div class="row"><div class="label">Tryb przekazania</div><div class="value">${escapeHtml(issueType)}</div></div>
       <div class="row"><div class="label">Adres wydania (PRG)</div><div class="value">${escapeHtml(args.issueAddressText || "—")}</div></div>
+      <div class="row"><div class="label">Lokal</div><div class="value">${escapeHtml(args.issueAddressLocal || "—")}</div></div>
       <div class="row"><div class="label">Adres IP zarządzania</div><div class="value">${escapeHtml(args.managementIp || "—")}</div></div>
       <div class="row"><div class="label">Sieć zarządzania</div><div class="value">${escapeHtml(args.managementNetworkCidr || "—")}</div></div>
     </div>
@@ -410,6 +417,7 @@ function openSubscriberReturnPdf(args: {
   returnCondition: DeviceCondition;
   returnReason?: string;
   issueAddressText?: string;
+  issueAddressLocal?: string;
   managementIp?: string;
   managementNetworkCidr?: string;
 }) {
@@ -480,6 +488,7 @@ function openSubscriberReturnPdf(args: {
       <div class="row"><div class="label">MAC</div><div class="value">${escapeHtml(args.mac || "—")}</div></div>
       <div class="row"><div class="label">Stan przy zwrocie</div><div class="value">${escapeHtml(prettyCondition(args.returnCondition))}</div></div>
       <div class="row"><div class="label">Adres wydania (PRG)</div><div class="value">${escapeHtml(args.issueAddressText || "—")}</div></div>
+      <div class="row"><div class="label">Lokal</div><div class="value">${escapeHtml(args.issueAddressLocal || "—")}</div></div>
       <div class="row"><div class="label">Adres IP zarządzania</div><div class="value">${escapeHtml(args.managementIp || "—")}</div></div>
       <div class="row"><div class="label">Sieć zarządzania</div><div class="value">${escapeHtml(args.managementNetworkCidr || "—")}</div></div>
     </div>
@@ -580,6 +589,7 @@ function SubscriberOnt({ s }: { s: SubscriberRecord }) {
                   <KV k="Tryb wydania" v={ont.assignment.ownership === "SPRZEDANY" ? "sprzedany" : "wypożyczenie"} />
                   <KV k="Wydano" v={formatDateTime(ont.assignment.issuedAtIso)} />
                   <KV k="Adres wydania" v={ont.assignment.issueAddressText ?? "—"} />
+                  <KV k="Lokal" v={ont.assignment.issueAddressLocal ?? "—"} />
                   <KV k="IP zarządzania" v={ont.assignment.managementIp ?? "—"} />
                   <KV k="Sieć zarządzania" v={ont.assignment.managementNetworkCidr ?? "—"} />
                   <KV k="Ostatni powód wyłączenia" v={telemetry?.lastDisableReason ?? "Brak"} />
@@ -669,6 +679,7 @@ function SubscriberEquipment({ s }: { s: SubscriberRecord }) {
   const [issueOwnership, setIssueOwnership] = useState<"SPRZEDANY" | "WYPOZYCZENIE">("WYPOZYCZENIE");
   const [issueReason, setIssueReason] = useState("");
   const [issueAddressPick, setIssueAddressPick] = useState<PrgAddressPick | null>(null);
+  const [issueAddressLocal, setIssueAddressLocal] = useState("");
   const [issueManagementAddressId, setIssueManagementAddressId] = useState("");
   const [returnReasonById, setReturnReasonById] = useState<Record<string, string>>({});
   const [returnConditionById, setReturnConditionById] = useState<Record<string, DeviceCondition>>({});
@@ -710,6 +721,7 @@ function SubscriberEquipment({ s }: { s: SubscriberRecord }) {
         ownership: issueOwnership,
         reason: issueReason,
         issueAddressText: formatPrgAddressText(issueAddressPick),
+        issueAddressLocal,
         managementIpAddressId: issueManagementAddressId,
       });
       setLastIssueDeviceId(issueDeviceId);
@@ -717,6 +729,7 @@ function SubscriberEquipment({ s }: { s: SubscriberRecord }) {
       setIssueReason("");
       setIssueDeviceId("");
       setIssueAddressPick(null);
+      setIssueAddressLocal("");
       setIssueManagementAddressId("");
       setConfirmIssueOpen(false);
     } catch (err) {
@@ -796,6 +809,7 @@ function SubscriberEquipment({ s }: { s: SubscriberRecord }) {
                               issuedAtIso: assignment.issuedAtIso,
                               issueReason: assignment.issueReason,
                               issueAddressText: assignment.issueAddressText,
+                              issueAddressLocal: assignment.issueAddressLocal,
                               managementIp: assignment.managementIp,
                               managementNetworkCidr: assignment.managementNetworkCidr,
                             })
@@ -820,6 +834,7 @@ function SubscriberEquipment({ s }: { s: SubscriberRecord }) {
                               returnCondition: assignment.returnCondition ?? device.condition,
                               returnReason: assignment.returnReason,
                               issueAddressText: assignment.issueAddressText,
+                              issueAddressLocal: assignment.issueAddressLocal,
                               managementIp: assignment.managementIp,
                               managementNetworkCidr: assignment.managementNetworkCidr,
                             })
@@ -837,6 +852,7 @@ function SubscriberEquipment({ s }: { s: SubscriberRecord }) {
                       <div><span className="text-muted-foreground">Wydano:</span> {formatDateTime(assignment.issuedAtIso)}</div>
                       <div className="mt-1"><span className="text-muted-foreground">Tryb:</span> {assignment.ownership === "SPRZEDANY" ? "sprzedany" : "wypożyczenie"}</div>
                       <div className="mt-1"><span className="text-muted-foreground">Adres wydania:</span> {assignment.issueAddressText ?? "—"}</div>
+                      <div className="mt-1"><span className="text-muted-foreground">Lokal:</span> {assignment.issueAddressLocal ?? "—"}</div>
                       <div className="mt-1"><span className="text-muted-foreground">IP zarządzania:</span> {assignment.managementIp ?? "—"}</div>
                       {assignment.managementIp ? (
                         <div className="mt-2 flex flex-wrap gap-2">
@@ -925,8 +941,19 @@ function SubscriberEquipment({ s }: { s: SubscriberRecord }) {
                 onPick={setIssueAddressPick}
               />
               <div className="mt-3 rounded-lg border bg-muted/20 p-3 text-sm">
-                <div><span className="text-muted-foreground">Wybrany adres:</span> {formatPrgAddressText(issueAddressPick) || "—"}</div>
+                <div><span className="text-muted-foreground">Wybrany adres:</span> {formatPrgAddressText(issueAddressPick, issueAddressLocal) || "—"}</div>
+                <div className="mt-1"><span className="text-muted-foreground">Lokal:</span> {issueAddressLocal.trim() || "—"}</div>
               </div>
+            </div>
+            <div>
+              <div className="mb-1 text-xs text-muted-foreground">Lokal (opcjonalnie)</div>
+              <input
+                value={issueAddressLocal}
+                onChange={(event) => setIssueAddressLocal(event.target.value)}
+                placeholder="Np. 12, A, 3B"
+                className="w-full rounded-md border border-border bg-background px-3 py-2 text-sm"
+              />
+              <div className="mt-2 text-xs text-muted-foreground">Dla mieszkań i lokali usługowych. Zostaw puste, jeśli sprzęt trafia tylko do budynku.</div>
             </div>
             <div>
               <div className="mb-1 text-xs text-muted-foreground">Adres IP zarządzania</div>
@@ -988,6 +1015,7 @@ function SubscriberEquipment({ s }: { s: SubscriberRecord }) {
                         issuedAtIso: assignment.assignment.issuedAtIso,
                         issueReason: assignment.assignment.issueReason,
                         issueAddressText: assignment.assignment.issueAddressText,
+                        issueAddressLocal: assignment.assignment.issueAddressLocal,
                         managementIp: assignment.assignment.managementIp,
                         managementNetworkCidr: assignment.assignment.managementNetworkCidr,
                       })
@@ -1111,6 +1139,8 @@ function SubscriberEquipment({ s }: { s: SubscriberRecord }) {
           <div className="mt-1"><span className="text-muted-foreground">Sprzęt:</span> {availableDevices.find((device) => device.id === issueDeviceId)?.model ?? "—"}</div>
           <div className="mt-1"><span className="text-muted-foreground">Numer seryjny:</span> {availableDevices.find((device) => device.id === issueDeviceId)?.serialNo ?? "—"}</div>
           <div className="mt-1"><span className="text-muted-foreground">Tryb:</span> {issueOwnership === "SPRZEDANY" ? "sprzedany" : "wypożyczenie"}</div>
+          <div className="mt-1"><span className="text-muted-foreground">Adres wydania:</span> {formatPrgAddressText(issueAddressPick, issueAddressLocal) || "—"}</div>
+          <div className="mt-1"><span className="text-muted-foreground">Lokal:</span> {issueAddressLocal.trim() || "—"}</div>
         </div>
         {!issueReason.trim() ? (
           <div className="rounded-lg border border-red-500/30 bg-red-500/10 px-3 py-2 text-sm text-red-700 dark:text-red-300">
