@@ -28,7 +28,9 @@ export type InventoryHistoryAction =
   | "EDIT"
   | "STATUS_CHANGE"
   | "CONDITION_CHANGE"
-  | "RECEIPT";
+  | "RECEIPT"
+  | "ISSUE_TO_SUBSCRIBER"
+  | "RETURN_FROM_SUBSCRIBER";
 
 export type InventoryHistoryEvent = {
   id: string;
@@ -49,6 +51,23 @@ export type InventoryModelSummary = {
   minAlarm: number;
 };
 
+
+export type SubscriberDeviceOwnership = "SPRZEDANY" | "WYPOZYCZENIE";
+
+export type SubscriberDeviceAssignment = {
+  id: string;
+  deviceId: string;
+  subscriberId: string;
+  ownership: SubscriberDeviceOwnership;
+  issuedAtIso: string;
+  issuedBy: string;
+  issueReason: string;
+  returnAtIso?: string;
+  returnedBy?: string;
+  returnReason?: string;
+  returnCondition?: DeviceCondition;
+};
+
 export type InventoryReceiptDraft = {
   invoiceNo?: string;
   vendor?: string;
@@ -64,6 +83,7 @@ export type InventoryState = {
   devices: InventoryDevice[];
   modelSummaries: InventoryModelSummary[];
   historyByDeviceId: Record<string, InventoryHistoryEvent[]>;
+  subscriberAssignments: SubscriberDeviceAssignment[];
 };
 
 function uid(prefix: string) {
@@ -173,7 +193,34 @@ function seedState(): InventoryState {
     ];
   }
 
-  return { devices, modelSummaries: models, historyByDeviceId };
+  const subscriberAssignments: SubscriberDeviceAssignment[] = [
+    {
+      id: uid("sda"),
+      deviceId: "dev-ont-0002",
+      subscriberId: "sub_0001",
+      ownership: "WYPOZYCZENIE",
+      issuedAtIso: "2026-02-10T12:00:00.000Z",
+      issuedBy: DEFAULT_ACTOR,
+      issueReason: "Wydanie ONT do instalacji FTTH",
+    },
+  ];
+
+  historyByDeviceId["dev-ont-0002"] = [
+    {
+      id: uid("invhe"),
+      deviceId: "dev-ont-0002",
+      atIso: "2026-02-10T12:00:00.000Z",
+      actor: DEFAULT_ACTOR,
+      action: "ISSUE_TO_SUBSCRIBER",
+      reason: "Wydanie ONT do abonenta sub_0001",
+      before: { status: "MAGAZYN" },
+      after: { status: "KLIENT" },
+      meta: { subscriberId: "sub_0001", ownership: "WYPOZYCZENIE" },
+    },
+    ...historyByDeviceId["dev-ont-0002"],
+  ];
+
+  return { devices, modelSummaries: models, historyByDeviceId, subscriberAssignments };
 }
 
 let STATE: InventoryState = seedState();
@@ -368,4 +415,125 @@ export function createReceipt(draft: InventoryReceiptDraft, reason: string) {
   STATE = next;
   emit();
   return created.map((d) => d.id);
+}
+
+export function getDeviceAssignmentsForSubscriber(subscriberId: string) {
+  const assignments = STATE.subscriberAssignments
+    .filter((row) => row.subscriberId === subscriberId)
+    .sort((a, b) => (a.returnAtIso ? 1 : 0) - (b.returnAtIso ? 1 : 0) || b.issuedAtIso.localeCompare(a.issuedAtIso));
+
+  return assignments.map((assignment) => ({
+    assignment,
+    device: STATE.devices.find((device) => device.id === assignment.deviceId) ?? null,
+  }));
+}
+
+export function getAvailableDevicesForSubscriberIssue() {
+  return STATE.devices
+    .filter((device) => device.status === "MAGAZYN" && device.condition !== "ARCHIWUM")
+    .sort((a, b) => a.kind.localeCompare(b.kind) || a.model.localeCompare(b.model) || a.serialNo.localeCompare(b.serialNo));
+}
+
+export function issueDeviceToSubscriber(args: {
+  subscriberId: string;
+  deviceId: string;
+  ownership: SubscriberDeviceOwnership;
+  reason: string;
+  actor?: string;
+}) {
+  const reason = args.reason?.trim();
+  if (!reason) throw new Error("Powód wydania jest wymagany");
+
+  const before = STATE.devices.find((device) => device.id === args.deviceId);
+  if (!before) throw new Error("Nie znaleziono urządzenia");
+  if (before.status !== "MAGAZYN") throw new Error("Wydać do klienta można tylko sprzęt ze statusu MAGAZYN");
+  if (before.condition === "ARCHIWUM") throw new Error("Nie można wydać urządzenia w archiwum");
+
+  const activeAssignment = STATE.subscriberAssignments.find((row) => row.deviceId === args.deviceId && !row.returnAtIso);
+  if (activeAssignment) throw new Error("Urządzenie jest już przypisane do abonenta");
+
+  const after: InventoryDevice = { ...before, status: "KLIENT", updatedAtIso: nowIso() };
+  const assignment: SubscriberDeviceAssignment = {
+    id: uid("sda"),
+    deviceId: args.deviceId,
+    subscriberId: args.subscriberId,
+    ownership: args.ownership,
+    issuedAtIso: after.updatedAtIso,
+    issuedBy: args.actor ?? DEFAULT_ACTOR,
+    issueReason: reason,
+  };
+
+  let next: InventoryState = {
+    ...STATE,
+    devices: STATE.devices.map((device) => (device.id === args.deviceId ? after : device)),
+    subscriberAssignments: [assignment, ...STATE.subscriberAssignments],
+  };
+  next = {
+    ...next,
+    historyByDeviceId: pushHistory(next, args.deviceId, {
+      action: "ISSUE_TO_SUBSCRIBER",
+      reason,
+      actor: assignment.issuedBy,
+      before: { status: before.status },
+      after: { status: "KLIENT" },
+      meta: { subscriberId: args.subscriberId, ownership: args.ownership },
+    }),
+  };
+
+  STATE = next;
+  emit();
+}
+
+export function returnDeviceFromSubscriber(args: {
+  subscriberId: string;
+  deviceId: string;
+  condition: DeviceCondition;
+  reason: string;
+  actor?: string;
+}) {
+  const reason = args.reason?.trim();
+  if (!reason) throw new Error("Powód zwrotu jest wymagany");
+
+  const before = STATE.devices.find((device) => device.id === args.deviceId);
+  if (!before) throw new Error("Nie znaleziono urządzenia");
+
+  const assignment = STATE.subscriberAssignments.find((row) => row.deviceId === args.deviceId && row.subscriberId === args.subscriberId && !row.returnAtIso);
+  if (!assignment) throw new Error("To urządzenie nie jest aktywnie przypisane do tego abonenta");
+
+  const after: InventoryDevice = {
+    ...before,
+    status: "MAGAZYN",
+    condition: args.condition,
+    updatedAtIso: nowIso(),
+  };
+
+  let next: InventoryState = {
+    ...STATE,
+    devices: STATE.devices.map((device) => (device.id === args.deviceId ? after : device)),
+    subscriberAssignments: STATE.subscriberAssignments.map((row) =>
+      row.id === assignment.id
+        ? {
+            ...row,
+            returnAtIso: after.updatedAtIso,
+            returnedBy: args.actor ?? DEFAULT_ACTOR,
+            returnReason: reason,
+            returnCondition: args.condition,
+          }
+        : row
+    ),
+  };
+  next = {
+    ...next,
+    historyByDeviceId: pushHistory(next, args.deviceId, {
+      action: "RETURN_FROM_SUBSCRIBER",
+      reason,
+      actor: args.actor ?? DEFAULT_ACTOR,
+      before: { status: before.status, condition: before.condition },
+      after: { status: "MAGAZYN", condition: args.condition },
+      meta: { subscriberId: args.subscriberId },
+    }),
+  };
+
+  STATE = next;
+  emit();
 }

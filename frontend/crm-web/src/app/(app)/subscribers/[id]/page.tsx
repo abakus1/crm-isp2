@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useParams } from "next/navigation";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState, useSyncExternalStore } from "react";
 
 import { SimpleModal } from "@/components/SimpleModal";
 import { PrgAddressFinder, type PrgAddressPick } from "@/components/PrgAddressFinder";
@@ -12,16 +12,26 @@ import { SubscriberPaymentPlan } from "./SubscriberPaymentPlan";
 import { getStaffLabel, getTasksForSubscriber } from "@/lib/mockTasks";
 import { useAuth } from "@/lib/auth";
 import { formatKind, formatStatus, seedSubscribers, type SubscriberRecord } from "@/lib/mockSubscribers";
+import {
+  type DeviceCondition,
+  getAvailableDevicesForSubscriberIssue,
+  getDeviceAssignmentsForSubscriber,
+  issueDeviceToSubscriber,
+  prettyCondition,
+  prettyKind,
+  returnDeviceFromSubscriber,
+  subscribeInventory,
+  getInventoryState,
+} from "@/lib/mockInventory";
 
 type TabKey =
   | "dane"
   | "adresy"
   | "umowy"
   | "uslugi"
-  | "urzadzenia"
   | "plan_platnosci"
   | "rozliczenia"
-  | "gpon"
+  | "sprzet"
   | "avios"
   | "zgody"
   | "historia"
@@ -33,10 +43,9 @@ const TABS: Array<{ key: TabKey; label: string }> = [
   { key: "adresy", label: "Adresy" },
   { key: "umowy", label: "Umowy" },
   { key: "uslugi", label: "Usługi" },
-  { key: "urzadzenia", label: "Urządzenia" },
   { key: "plan_platnosci", label: "Plan płatności" },
   { key: "rozliczenia", label: "Rozliczenia" },
-  { key: "gpon", label: "GPON" },
+  { key: "sprzet", label: "Sprzęt" },
   { key: "avios", label: "AVIOS" },
   { key: "zgody", label: "Zgody" },
   { key: "historia", label: "Historia" },
@@ -214,6 +223,250 @@ function SubscriberTasks({ s }: { s: SubscriberRecord }) {
         </div>
       )}
     </Card>
+  );
+}
+
+
+function useInventorySnapshot() {
+  return useSyncExternalStore(subscribeInventory, getInventoryState, getInventoryState);
+}
+
+function equipmentBadgeClass(kind: string) {
+  if (kind === "SPRZEDANY") return "border-fuchsia-500/30 bg-fuchsia-500/10 text-fuchsia-700 dark:text-fuchsia-300";
+  if (kind === "WYPOZYCZENIE") return "border-cyan-500/30 bg-cyan-500/10 text-cyan-700 dark:text-cyan-300";
+  if (kind === "KLIENT") return "border-blue-500/30 bg-blue-500/10 text-blue-700 dark:text-blue-300";
+  if (kind === "MAGAZYN") return "border-emerald-500/30 bg-emerald-500/10 text-emerald-700 dark:text-emerald-300";
+  if (kind === "SERWIS") return "border-amber-500/30 bg-amber-500/10 text-amber-700 dark:text-amber-300";
+  if (kind === "WYSŁANY_NAPRAWA") return "border-purple-500/30 bg-purple-500/10 text-purple-700 dark:text-purple-300";
+  if (kind === "SPRAWNY") return "border-emerald-500/30 bg-emerald-500/10 text-emerald-700 dark:text-emerald-300";
+  if (kind === "USZKODZONY" || kind === "DO_KASACJI") return "border-red-500/30 bg-red-500/10 text-red-700 dark:text-red-300";
+  if (kind === "NIEKOMPLETNY") return "border-amber-500/30 bg-amber-500/10 text-amber-700 dark:text-amber-300";
+  return "border-border bg-muted/40 text-foreground";
+}
+
+function EquipmentBadge({ value }: { value: string }) {
+  return <span className={["inline-flex items-center rounded-md border px-2 py-1 text-xs font-medium", equipmentBadgeClass(value)].join(" ")}>{value}</span>;
+}
+
+function SubscriberEquipment({ s }: { s: SubscriberRecord }) {
+  const inventory = useInventorySnapshot();
+  const [issueDeviceId, setIssueDeviceId] = useState("");
+  const [issueOwnership, setIssueOwnership] = useState<"SPRZEDANY" | "WYPOZYCZENIE">("WYPOZYCZENIE");
+  const [issueReason, setIssueReason] = useState("Wydanie sprzętu na kartotece abonenta");
+  const [returnReasonById, setReturnReasonById] = useState<Record<string, string>>({});
+  const [returnConditionById, setReturnConditionById] = useState<Record<string, DeviceCondition>>({});
+  const [error, setError] = useState<string | null>(null);
+  const [success, setSuccess] = useState<string | null>(null);
+
+  const assignments = useMemo(() => getDeviceAssignmentsForSubscriber(s.id), [inventory, s.id]);
+  const availableDevices = useMemo(() => getAvailableDevicesForSubscriberIssue(), [inventory]);
+  const activeAssignments = assignments.filter((row) => row.assignment.returnAtIso == null && row.device);
+  const historyAssignments = assignments.filter((row) => row.assignment.returnAtIso != null && row.device);
+
+  useEffect(() => {
+    if (!issueDeviceId && availableDevices[0]) setIssueDeviceId(availableDevices[0].id);
+  }, [availableDevices, issueDeviceId]);
+
+  function handleIssue() {
+    setError(null);
+    setSuccess(null);
+    try {
+      if (!issueDeviceId) throw new Error("Wybierz urządzenie do wydania");
+      issueDeviceToSubscriber({
+        subscriberId: s.id,
+        deviceId: issueDeviceId,
+        ownership: issueOwnership,
+        reason: issueReason,
+      });
+      setSuccess("Sprzęt został wydany z magazynu na kartotece abonenta.");
+      setIssueReason("Wydanie sprzętu na kartotece abonenta");
+      setIssueDeviceId("");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Nie udało się wydać sprzętu.");
+    }
+  }
+
+  function handleReturn(deviceId: string) {
+    setError(null);
+    setSuccess(null);
+    try {
+      returnDeviceFromSubscriber({
+        subscriberId: s.id,
+        deviceId,
+        condition: returnConditionById[deviceId] ?? "SPRAWNY",
+        reason: returnReasonById[deviceId] || "Zwrot sprzętu z kartoteki abonenta",
+      });
+      setSuccess("Sprzęt został zwrócony na magazyn z określeniem stanu.");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Nie udało się zwrócić sprzętu.");
+    }
+  }
+
+  return (
+    <div className="space-y-4">
+      <div className="grid grid-cols-1 gap-4 xl:grid-cols-[1.1fr_0.9fr]">
+        <Card
+          title="Sprzęt przypisany do abonenta"
+          desc="Tu zamykamy obieg: wydanie do klienta i zwrot na magazyn dzieją się tylko z kartoteki abonenta. Magazyn ogarnia wyłącznie ruch wewnętrzny, żeby chaos nie levelował operatora."
+        >
+          <div className="grid grid-cols-1 gap-3 md:grid-cols-3">
+            <div className="rounded-xl border bg-muted/20 p-3">
+              <div className="text-xs text-muted-foreground">Aktywne urządzenia</div>
+              <div className="mt-2 text-2xl font-semibold">{activeAssignments.length}</div>
+            </div>
+            <div className="rounded-xl border bg-muted/20 p-3">
+              <div className="text-xs text-muted-foreground">Wypożyczenia</div>
+              <div className="mt-2 text-2xl font-semibold">{activeAssignments.filter((row) => row.assignment.ownership === "WYPOZYCZENIE").length}</div>
+            </div>
+            <div className="rounded-xl border bg-muted/20 p-3">
+              <div className="text-xs text-muted-foreground">Sprzedane</div>
+              <div className="mt-2 text-2xl font-semibold">{activeAssignments.filter((row) => row.assignment.ownership === "SPRZEDANY").length}</div>
+            </div>
+          </div>
+
+          <div className="mt-4 space-y-3">
+            {activeAssignments.length === 0 ? (
+              <div className="rounded-lg border border-dashed p-4 text-sm text-muted-foreground">Brak aktywnie przypisanego sprzętu do tego abonenta.</div>
+            ) : (
+              activeAssignments.map(({ assignment, device }) => (
+                <div key={assignment.id} className="rounded-xl border p-3">
+                  <div className="flex flex-wrap items-start justify-between gap-3">
+                    <div>
+                      <div className="text-sm font-semibold">{device?.model ?? "Nieznane urządzenie"}</div>
+                      <div className="mt-1 text-xs text-muted-foreground">{prettyKind(device?.kind ?? "INNY")} • SN: {device?.serialNo ?? "—"} • MAC: {device?.mac ?? "—"}</div>
+                    </div>
+                    <div className="flex flex-wrap gap-2">
+                      <EquipmentBadge value={assignment.ownership} />
+                      <EquipmentBadge value={device?.status ?? "KLIENT"} />
+                      <EquipmentBadge value={device?.condition ?? "SPRAWNY"} />
+                    </div>
+                  </div>
+
+                  <div className="mt-3 grid grid-cols-1 gap-3 lg:grid-cols-2">
+                    <div className="rounded-lg border bg-muted/20 p-3 text-sm">
+                      <div><span className="text-muted-foreground">Wydano:</span> {formatDateTime(assignment.issuedAtIso)}</div>
+                      <div className="mt-1"><span className="text-muted-foreground">Tryb:</span> {assignment.ownership === "SPRZEDANY" ? "sprzedany" : "wypożyczenie"}</div>
+                      <div className="mt-1"><span className="text-muted-foreground">Powód:</span> {assignment.issueReason}</div>
+                    </div>
+                    <div className="rounded-lg border bg-muted/20 p-3 space-y-3">
+                      <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
+                        <div>
+                          <div className="mb-1 text-xs text-muted-foreground">Stan przy zwrocie</div>
+                          <select
+                            value={returnConditionById[device!.id] ?? "SPRAWNY"}
+                            onChange={(event) => setReturnConditionById((prev) => ({ ...prev, [device!.id]: event.target.value as DeviceCondition }))}
+                            className="w-full rounded-md border border-border bg-background px-3 py-2 text-sm"
+                          >
+                            <option value="SPRAWNY">sprawny</option>
+                            <option value="NIEKOMPLETNY">niekompletny</option>
+                            <option value="USZKODZONY">uszkodzony</option>
+                            <option value="DO_KASACJI">do kasacji</option>
+                            <option value="ARCHIWUM">archiwum</option>
+                          </select>
+                        </div>
+                        <div className="flex items-end">
+                          <button type="button" onClick={() => handleReturn(device!.id)} className="w-full rounded-md border px-3 py-2 text-sm hover:bg-muted/40">
+                            Zwrot na magazyn
+                          </button>
+                        </div>
+                      </div>
+                      <div>
+                        <div className="mb-1 text-xs text-muted-foreground">Opis zwrotu</div>
+                        <textarea
+                          rows={2}
+                          value={returnReasonById[device!.id] ?? "Zwrot sprzętu z kartoteki abonenta"}
+                          onChange={(event) => setReturnReasonById((prev) => ({ ...prev, [device!.id]: event.target.value }))}
+                          className="w-full rounded-md border border-border bg-background px-3 py-2 text-sm"
+                        />
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              ))
+            )}
+          </div>
+        </Card>
+
+        <Card
+          title="Wydanie sprzętu z magazynu"
+          desc="Wybierasz urządzenie ze statusu MAGAZYN, określasz czy to sprzedaż czy wypożyczenie i hop — karta klienta staje się jedyną bramką do ruchu klientowego."
+        >
+          <div className="space-y-3">
+            <div>
+              <div className="mb-1 text-xs text-muted-foreground">Urządzenie dostępne w magazynie</div>
+              <select value={issueDeviceId} onChange={(event) => setIssueDeviceId(event.target.value)} className="w-full rounded-md border border-border bg-background px-3 py-2 text-sm">
+                {availableDevices.length === 0 ? <option value="">Brak dostępnych urządzeń</option> : null}
+                {availableDevices.map((device) => (
+                  <option key={device.id} value={device.id}>
+                    {prettyKind(device.kind)} • {device.model} • {device.serialNo} • {prettyCondition(device.condition)}
+                  </option>
+                ))}
+              </select>
+            </div>
+            <div>
+              <div className="mb-1 text-xs text-muted-foreground">Tryb wydania</div>
+              <div className="grid grid-cols-2 gap-2">
+                <button type="button" onClick={() => setIssueOwnership("WYPOZYCZENIE")} className={["rounded-md border px-3 py-2 text-sm", issueOwnership === "WYPOZYCZENIE" ? "bg-muted/60" : "hover:bg-muted/40"].join(" ")}>
+                  Wypożyczenie
+                </button>
+                <button type="button" onClick={() => setIssueOwnership("SPRZEDANY")} className={["rounded-md border px-3 py-2 text-sm", issueOwnership === "SPRZEDANY" ? "bg-muted/60" : "hover:bg-muted/40"].join(" ")}>
+                  Sprzedany
+                </button>
+              </div>
+            </div>
+            <div>
+              <div className="mb-1 text-xs text-muted-foreground">Opis wydania</div>
+              <textarea rows={3} value={issueReason} onChange={(event) => setIssueReason(event.target.value)} className="w-full rounded-md border border-border bg-background px-3 py-2 text-sm" />
+            </div>
+            <button type="button" onClick={handleIssue} className="w-full rounded-md border px-3 py-2 text-sm hover:bg-muted/40">
+              Wydaj sprzęt do abonenta
+            </button>
+
+            {error ? <div className="rounded-lg border border-red-500/30 bg-red-500/10 px-3 py-2 text-sm text-red-700 dark:text-red-300">{error}</div> : null}
+            {success ? <div className="rounded-lg border border-emerald-500/30 bg-emerald-500/10 px-3 py-2 text-sm text-emerald-700 dark:text-emerald-300">{success}</div> : null}
+
+            <div className="rounded-xl border bg-muted/20 p-3 text-xs text-muted-foreground">
+              Magazyn zostaje miejscem tylko dla ruchu wewnętrznego: magazyn ↔ serwis ↔ wysłany naprawa.
+              Ruch klientowy robimy tutaj, więc historia abonenta i sprzętu jest spójna i nie trzeba później robić cyfrowej archeologii.
+            </div>
+          </div>
+        </Card>
+      </div>
+
+      <Card title="Historia sprzętu na abonencie" desc="Lista wszystkich wydań i zwrotów dla tej kartoteki. UI-only mock, ale flow już jest jak trzeba.">
+        {historyAssignments.length === 0 ? (
+          <div className="rounded-lg border border-dashed p-4 text-sm text-muted-foreground">Brak zwróconych urządzeń w historii abonenta.</div>
+        ) : (
+          <div className="space-y-3">
+            {historyAssignments.map(({ assignment, device }) => (
+              <div key={assignment.id} className="rounded-xl border p-3">
+                <div className="flex flex-wrap items-start justify-between gap-3">
+                  <div>
+                    <div className="text-sm font-semibold">{device?.model ?? "Nieznane urządzenie"}</div>
+                    <div className="mt-1 text-xs text-muted-foreground">{prettyKind(device?.kind ?? "INNY")} • SN: {device?.serialNo ?? "—"}</div>
+                  </div>
+                  <div className="flex flex-wrap gap-2">
+                    <EquipmentBadge value={assignment.ownership} />
+                    <EquipmentBadge value={assignment.returnCondition ?? device?.condition ?? "SPRAWNY"} />
+                  </div>
+                </div>
+                <div className="mt-3 grid grid-cols-1 gap-3 lg:grid-cols-2">
+                  <div className="rounded-lg border bg-muted/20 p-3 text-sm">
+                    <div><span className="text-muted-foreground">Wydano:</span> {formatDateTime(assignment.issuedAtIso)}</div>
+                    <div className="mt-1"><span className="text-muted-foreground">Opis wydania:</span> {assignment.issueReason}</div>
+                  </div>
+                  <div className="rounded-lg border bg-muted/20 p-3 text-sm">
+                    <div><span className="text-muted-foreground">Zwrot:</span> {formatDateTime(assignment.returnAtIso)}</div>
+                    <div className="mt-1"><span className="text-muted-foreground">Stan przy zwrocie:</span> {assignment.returnCondition ? prettyCondition(assignment.returnCondition) : "—"}</div>
+                    <div className="mt-1"><span className="text-muted-foreground">Opis zwrotu:</span> {assignment.returnReason ?? "—"}</div>
+                  </div>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </Card>
+    </div>
   );
 }
 
@@ -1049,19 +1302,7 @@ export default function SubscriberDetailsPage({ params }: { params: { id: string
             </div>
           )}
 
-          {tab === "urzadzenia" && (
-            <PlaceholderList
-              title="Urządzenia"
-              hint="W excelu: wszystkie urządzenia wydane na klienta + zwroty + historia."
-              items={[
-                "Lista urządzeń (ONT/STB/router) wydanych do abonenta — placeholder",
-                "Dokument wydania/wypożyczenia jako załącznik do umowy — placeholder",
-                "Zwroty + daty + protokoły — placeholder",
-              ]}
-            />
-          )}
-
-          {tab === "plan_platnosci" && <SubscriberPaymentPlan subscriber={s} />}
+                    {tab === "plan_platnosci" && <SubscriberPaymentPlan subscriber={s} />}
 
           {tab === "rozliczenia" && (
             <div className="grid grid-cols-1 lg:grid-cols-2 gap-3">
@@ -1085,18 +1326,7 @@ export default function SubscriberDetailsPage({ params }: { params: { id: string
             </div>
           )}
 
-          {tab === "gpon" && (
-            <PlaceholderList
-              title="GPON"
-              hint="W excelu: ONT wydany, status mocy sygnału, reset/restart, historia."
-              items={[
-                "ONT przypisany do abonenta — placeholder",
-                "Status mocy sygnału (Rx/Tx) — placeholder",
-                "Możliwość restartu urządzenia — placeholder",
-                "Historia aktywności — placeholder",
-              ]}
-            />
-          )}
+          {tab === "sprzet" && <SubscriberEquipment s={s} />}
 
           {tab === "avios" && (
             <PlaceholderList
