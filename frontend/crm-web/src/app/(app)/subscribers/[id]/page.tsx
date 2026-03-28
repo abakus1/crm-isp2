@@ -7,6 +7,8 @@ import { useEffect, useMemo, useState } from "react";
 import { SimpleModal } from "@/components/SimpleModal";
 import { PrgAddressFinder, type PrgAddressPick } from "@/components/PrgAddressFinder";
 import { ApiError, apiFetch } from "@/lib/api";
+
+import { SubscriberPaymentPlan } from "./SubscriberPaymentPlan";
 import { getStaffLabel, getTasksForSubscriber } from "@/lib/mockTasks";
 import { useAuth } from "@/lib/auth";
 import { formatKind, formatStatus, seedSubscribers, type SubscriberRecord } from "@/lib/mockSubscribers";
@@ -17,6 +19,7 @@ type TabKey =
   | "umowy"
   | "uslugi"
   | "urzadzenia"
+  | "plan_platnosci"
   | "rozliczenia"
   | "gpon"
   | "avios"
@@ -31,6 +34,7 @@ const TABS: Array<{ key: TabKey; label: string }> = [
   { key: "umowy", label: "Umowy" },
   { key: "uslugi", label: "Usługi" },
   { key: "urzadzenia", label: "Urządzenia" },
+  { key: "plan_platnosci", label: "Plan płatności" },
   { key: "rozliczenia", label: "Rozliczenia" },
   { key: "gpon", label: "GPON" },
   { key: "avios", label: "AVIOS" },
@@ -1056,6 +1060,8 @@ export default function SubscriberDetailsPage({ params }: { params: { id: string
               ]}
             />
           )}
+
+          {tab === "plan_platnosci" && <SubscriberPaymentPlan subscriber={s} />}
 
           {tab === "rozliczenia" && (
             <div className="grid grid-cols-1 lg:grid-cols-2 gap-3">
