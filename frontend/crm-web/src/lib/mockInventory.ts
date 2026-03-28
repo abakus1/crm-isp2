@@ -79,11 +79,23 @@ export type InventoryReceiptDraft = {
   items: Array<{ serialNo: string; mac?: string }>;
 };
 
+export type OntDeviceTelemetry = {
+  deviceId: string;
+  serialNo: string;
+  enabled: boolean;
+  profileName: string;
+  signalPowerDbm: string;
+  lastDisableReason: string;
+  statusLabel: string;
+  lastSeenAtIso: string;
+};
+
 export type InventoryState = {
   devices: InventoryDevice[];
   modelSummaries: InventoryModelSummary[];
   historyByDeviceId: Record<string, InventoryHistoryEvent[]>;
   subscriberAssignments: SubscriberDeviceAssignment[];
+  ontTelemetryByDeviceId: Record<string, OntDeviceTelemetry>;
 };
 
 function uid(prefix: string) {
@@ -220,7 +232,20 @@ function seedState(): InventoryState {
     ...historyByDeviceId["dev-ont-0002"],
   ];
 
-  return { devices, modelSummaries: models, historyByDeviceId, subscriberAssignments };
+  const ontTelemetryByDeviceId: Record<string, OntDeviceTelemetry> = {
+    "dev-ont-0002": {
+      deviceId: "dev-ont-0002",
+      serialNo: "FTECH01-0002",
+      enabled: true,
+      profileName: "FTTH 600/100 Home",
+      signalPowerDbm: "-19.6 dBm",
+      lastDisableReason: "Brak ostatniego wyłączenia operatora",
+      statusLabel: "Włączony",
+      lastSeenAtIso: "2026-03-28T16:48:00.000Z",
+    },
+  };
+
+  return { devices, modelSummaries: models, historyByDeviceId, subscriberAssignments, ontTelemetryByDeviceId };
 }
 
 let STATE: InventoryState = seedState();
@@ -281,9 +306,13 @@ export function editDevice(
   const before = STATE.devices.find((d) => d.id === deviceId);
   if (!before) throw new Error("Nie znaleziono urządzenia");
 
+  const nextSerialNo = patch.serialNo?.trim() ?? before.serialNo;
+  if (!nextSerialNo) throw new Error("Numer seryjny jest wymagany");
+
   const after: InventoryDevice = {
     ...before,
     ...patch,
+    serialNo: nextSerialNo,
     updatedAtIso: nowIso(),
   };
 
@@ -467,6 +496,22 @@ export function issueDeviceToSubscriber(args: {
     ...STATE,
     devices: STATE.devices.map((device) => (device.id === args.deviceId ? after : device)),
     subscriberAssignments: [assignment, ...STATE.subscriberAssignments],
+    ontTelemetryByDeviceId:
+      before.kind === "ONT"
+        ? {
+            ...STATE.ontTelemetryByDeviceId,
+            [args.deviceId]: STATE.ontTelemetryByDeviceId[args.deviceId] ?? {
+              deviceId: args.deviceId,
+              serialNo: before.serialNo,
+              enabled: true,
+              profileName: "Profil do konfiguracji",
+              signalPowerDbm: "brak odczytu",
+              lastDisableReason: "Brak",
+              statusLabel: "Włączony",
+              lastSeenAtIso: nowIso(),
+            },
+          }
+        : STATE.ontTelemetryByDeviceId,
   };
   next = {
     ...next,
@@ -507,6 +552,9 @@ export function returnDeviceFromSubscriber(args: {
     updatedAtIso: nowIso(),
   };
 
+  const nextTelemetry = { ...STATE.ontTelemetryByDeviceId };
+  delete nextTelemetry[args.deviceId];
+
   let next: InventoryState = {
     ...STATE,
     devices: STATE.devices.map((device) => (device.id === args.deviceId ? after : device)),
@@ -521,6 +569,7 @@ export function returnDeviceFromSubscriber(args: {
           }
         : row
     ),
+    ontTelemetryByDeviceId: nextTelemetry,
   };
   next = {
     ...next,
@@ -536,4 +585,19 @@ export function returnDeviceFromSubscriber(args: {
 
   STATE = next;
   emit();
+}
+
+
+export function getActiveOntForSubscriber(subscriberId: string) {
+  const activeAssignment = STATE.subscriberAssignments.find((row) => row.subscriberId === subscriberId && !row.returnAtIso);
+  if (!activeAssignment) return null;
+
+  const device = STATE.devices.find((row) => row.id === activeAssignment.deviceId && row.kind === "ONT");
+  if (!device) return null;
+
+  return {
+    assignment: activeAssignment,
+    device,
+    telemetry: STATE.ontTelemetryByDeviceId[device.id] ?? null,
+  };
 }

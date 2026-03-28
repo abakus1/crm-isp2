@@ -88,7 +88,7 @@ function todayIso() {
   return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
 }
 
-type EditorMode = "edit" | "status" | "condition" | "history";
+type EditorMode = "edit" | "internal_status" | "condition" | "history";
 
 export default function InventoryDevicesPage() {
   const inv = useInventory();
@@ -183,7 +183,7 @@ export default function InventoryDevicesPage() {
         <div>
           <div className="text-lg font-semibold">Magazyn urządzeń</div>
           <div className="text-sm text-muted-foreground">
-            UI-only: historia + powody zmian, bez backendu. Docelowo: audyt + operator history + powiązanie z addonami/usługami.
+            UI-only: historia + powody zmian, bez backendu. Ruch klientowy został przeniesiony wyłącznie do kartoteki abonenta, a magazyn obsługuje już tylko ruch wewnętrzny.
           </div>
         </div>
 
@@ -377,8 +377,8 @@ export default function InventoryDevicesPage() {
                       <button className={btnClass()} onClick={() => openEditor(d.id, "edit")}>
                         Edytuj
                       </button>
-                      <button className={btnClass()} onClick={() => openEditor(d.id, "status")}>
-                        Wydanie
+                      <button className={btnClass()} onClick={() => openEditor(d.id, "internal_status")} disabled={d.status === "KLIENT"} title={d.status === "KLIENT" ? "Ruch klientowy obsługujemy wyłącznie na kartotece abonenta" : "Przenieś urządzenie między statusami wewnętrznymi"}>
+                        Status wewnętrzny
                       </button>
                       <button className={btnClass()} onClick={() => openEditor(d.id, "condition")}>
                         Stan
@@ -455,8 +455,8 @@ function DeviceModal({
   const title =
     mode === "edit"
       ? `Edytuj: ${device.model} (${device.serialNo})`
-      : mode === "status"
-        ? `Wydanie / status: ${device.model} (${device.serialNo})`
+      : mode === "internal_status"
+        ? `Status wewnętrzny: ${device.model} (${device.serialNo})`
         : mode === "condition"
           ? `Stan urządzenia: ${device.model} (${device.serialNo})`
           : `Historia: ${device.model} (${device.serialNo})`;
@@ -518,7 +518,7 @@ function DeviceModal({
             Zapisz
           </button>
         ) : null}
-        {mode === "status" ? (
+        {mode === "internal_status" ? (
           <button className={btnClass("primary")} onClick={saveStatus}>
             Zapisz
           </button>
@@ -598,14 +598,13 @@ function DeviceModal({
         </div>
       ) : null}
 
-      {mode === "status" ? (
+      {mode === "internal_status" ? (
         <div className="space-y-3">
           <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
             <div>
               <div className="text-xs text-muted-foreground mb-1">Nowy status</div>
               <select className={selectClass()} value={status} onChange={(e) => setStatus(e.target.value as any)}>
                 <option value="MAGAZYN">magazyn</option>
-                <option value="KLIENT">klient</option>
                 <option value="SERWIS">serwis</option>
                 <option value="WYSŁANY_NAPRAWA">wysłany naprawa</option>
               </select>
@@ -626,7 +625,7 @@ function DeviceModal({
           </div>
 
           <div className="text-xs text-muted-foreground">
-            Docelowo „Wydanie” będzie robić powiązanie z abonentem/umową i generować dokument wypożyczenia.
+            Ruch klientowy (wydanie na abonenta i odbiór od abonenta) został wycięty z magazynu. Tutaj obsługujemy tylko ruch wewnętrzny: magazyn ↔ serwis ↔ wysłany naprawa.
           </div>
         </div>
       ) : null}

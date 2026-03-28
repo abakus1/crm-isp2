@@ -22,6 +22,7 @@ import {
   returnDeviceFromSubscriber,
   subscribeInventory,
   getInventoryState,
+  getActiveOntForSubscriber,
 } from "@/lib/mockInventory";
 
 type TabKey =
@@ -32,6 +33,7 @@ type TabKey =
   | "plan_platnosci"
   | "rozliczenia"
   | "sprzet"
+  | "ont"
   | "avios"
   | "zgody"
   | "historia"
@@ -46,6 +48,7 @@ const TABS: Array<{ key: TabKey; label: string }> = [
   { key: "plan_platnosci", label: "Plan płatności" },
   { key: "rozliczenia", label: "Rozliczenia" },
   { key: "sprzet", label: "Sprzęt" },
+  { key: "ont", label: "ONT" },
   { key: "avios", label: "AVIOS" },
   { key: "zgody", label: "Zgody" },
   { key: "historia", label: "Historia" },
@@ -145,6 +148,26 @@ function formatDateTime(value?: string | null) {
     hour: "2-digit",
     minute: "2-digit",
   }).format(date);
+}
+
+function formatDateOnly(value?: string | null) {
+  if (!value) return "—";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return value;
+  return new Intl.DateTimeFormat("pl-PL", {
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).format(date);
+}
+
+function escapeHtml(value: string) {
+  return value
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
 }
 
 function statusBadgeClass(status: string) {
@@ -248,6 +271,162 @@ function EquipmentBadge({ value }: { value: string }) {
   return <span className={["inline-flex items-center rounded-md border px-2 py-1 text-xs font-medium", equipmentBadgeClass(value)].join(" ")}>{value}</span>;
 }
 
+function getSubscriberDisplayName(s: SubscriberRecord) {
+  return s.display_name || [s.first_name, s.last_name].filter(Boolean).join(" ") || s.company_name || s.id;
+}
+
+function openSubscriberIssuePdf(args: {
+  subscriber: SubscriberRecord;
+  deviceModel: string;
+  serialNo: string;
+  ownership: "SPRZEDANY" | "WYPOZYCZENIE";
+  issuedAtIso: string;
+}) {
+  if (typeof window === "undefined") return;
+
+  const issueType = args.ownership === "SPRZEDANY" ? "sprzedany" : "wypożyczony";
+  const subscriberName = getSubscriberDisplayName(args.subscriber);
+  const addressLine = [
+    args.subscriber.addresses?.[0]?.street,
+    args.subscriber.addresses?.[0]?.building_no,
+    args.subscriber.addresses?.[0]?.apartment_no ? `/${args.subscriber.addresses?.[0]?.apartment_no}` : "",
+  ].filter(Boolean).join(" ");
+  const cityLine = [args.subscriber.addresses?.[0]?.postal_code, args.subscriber.addresses?.[0]?.city].filter(Boolean).join(" ");
+
+  const popup = window.open("", "_blank", "noopener,noreferrer,width=900,height=700");
+  if (!popup) return;
+
+  const html = `<!doctype html>
+<html lang="pl">
+<head>
+  <meta charset="utf-8" />
+  <title>Dokument wydania sprzętu</title>
+  <style>
+    body { font-family: Arial, sans-serif; margin: 40px; color: #111; }
+    h1 { font-size: 22px; margin-bottom: 24px; }
+    .muted { color: #666; }
+    .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; margin-bottom: 24px; }
+    .box { border: 1px solid #d0d0d0; border-radius: 12px; padding: 16px; }
+    .label { font-size: 12px; color: #666; text-transform: uppercase; margin-bottom: 6px; }
+    .value { font-size: 15px; font-weight: 600; }
+    .footer { margin-top: 32px; font-size: 12px; color: #444; }
+  </style>
+</head>
+<body>
+  <h1>Dokument wydania sprzętu</h1>
+  <div class="grid">
+    <div class="box">
+      <div class="label">Klient</div>
+      <div class="value">${escapeHtml(subscriberName)}</div>
+      <div class="muted">${escapeHtml(args.subscriber.phone || "Brak telefonu")}</div>
+      <div class="muted">${escapeHtml(args.subscriber.email || "Brak e-mail")}</div>
+      <div class="muted">${escapeHtml(addressLine || "Brak adresu")}</div>
+      <div class="muted">${escapeHtml(cityLine || "")}</div>
+    </div>
+    <div class="box">
+      <div class="label">Wydanie</div>
+      <div class="value">${escapeHtml(formatDateOnly(args.issuedAtIso))}</div>
+      <div class="muted">Tryb: ${escapeHtml(issueType)}</div>
+    </div>
+  </div>
+
+  <div class="box">
+    <div class="label">Urządzenie</div>
+    <div class="value">${escapeHtml(args.deviceModel)}</div>
+    <div class="muted">Numer seryjny: ${escapeHtml(args.serialNo)}</div>
+    <div class="muted">Status dokumentu: ${escapeHtml(issueType)}</div>
+  </div>
+
+  <div class="footer">
+    Dokument mock / UI preview. W docelowej wersji backend wygeneruje finalny PDF z numerem dokumentu, operatorem i podpisami.
+  </div>
+
+  <script>window.onload = () => window.print();</script>
+</body>
+</html>`;
+
+  popup.document.open();
+  popup.document.write(html);
+  popup.document.close();
+}
+
+function SubscriberOnt({ s }: { s: SubscriberRecord }) {
+  const inventory = useInventorySnapshot();
+  const ont = useMemo(() => getActiveOntForSubscriber(s.id), [inventory, s.id]);
+
+  if (!ont) {
+    return (
+      <Card
+        title="ONT abonenta"
+        desc="Zakładka pod provisioning i diagnostykę po wydaniu sprzętu. Tutaj ma być centrum dowodzenia ONT, a nie polowanie z latarką po notatkach instalatora."
+      >
+        <div className="rounded-lg border border-dashed p-4 text-sm text-muted-foreground">
+          Ten abonent nie ma aktywnie wydanego ONT. Najpierw wydaj urządzenie w zakładce Sprzęt.
+        </div>
+      </Card>
+    );
+  }
+
+  const telemetry = ont.telemetry;
+
+  return (
+    <div className="grid grid-cols-1 gap-4 xl:grid-cols-[1.05fr_0.95fr]">
+      <Card
+        title="ONT abonenta"
+        desc="Po wydaniu ONT z karty abonenta tutaj czytamy status i przygotowujemy miejsce pod provisioning. Dzięki temu sprzęt, profil i klient siedzą w jednym kontekście — jak cywilizowani ludzie, nie jak plik Excel po trzech kawach."
+      >
+        <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
+          <div className="rounded-xl border bg-muted/20 p-3">
+            <div className="text-xs text-muted-foreground">Status urządzenia</div>
+            <div className="mt-2 text-xl font-semibold">{telemetry?.enabled ? "Włączony" : "Wyłączony"}</div>
+            <div className="mt-1 text-xs text-muted-foreground">Ostatni odczyt: {formatDateTime(telemetry?.lastSeenAtIso)}</div>
+          </div>
+          <div className="rounded-xl border bg-muted/20 p-3">
+            <div className="text-xs text-muted-foreground">Aktualny profil</div>
+            <div className="mt-2 text-xl font-semibold">{telemetry?.profileName ?? "Do konfiguracji"}</div>
+            <div className="mt-1 text-xs text-muted-foreground">Moc sygnału: {telemetry?.signalPowerDbm ?? "brak odczytu"}</div>
+          </div>
+        </div>
+
+        <div className="mt-4 space-y-2 rounded-xl border p-3">
+          <KV k="Model" v={ont.device.model} />
+          <KV k="Numer seryjny" v={ont.device.serialNo} />
+          <KV k="MAC" v={ont.device.mac ?? "—"} />
+          <KV k="Tryb wydania" v={ont.assignment.ownership === "SPRZEDANY" ? "sprzedany" : "wypożyczenie"} />
+          <KV k="Wydano" v={formatDateTime(ont.assignment.issuedAtIso)} />
+          <KV k="Ostatni powód wyłączenia" v={telemetry?.lastDisableReason ?? "Brak"} />
+        </div>
+      </Card>
+
+      <Card
+        title="Provisioning / diagnostyka"
+        desc="UI mock pod przyszłe odczyty z GPON/OLT. Na razie pokazujemy docelowe pola, żeby backend wiedział, do czego ma dorosnąć bez freestyle’u."
+      >
+        <div className="space-y-3">
+          <div className="rounded-xl border bg-muted/20 p-3">
+            <div className="text-xs text-muted-foreground">Planowane akcje</div>
+            <ul className="mt-2 space-y-2 text-sm">
+              <li>• odczyt statusu ONT z OLT / ACS</li>
+              <li>• ustawienie / zmiana profilu usługi</li>
+              <li>• odczyt mocy sygnału i alarmów</li>
+              <li>• zapis ostatniego powodu wyłączenia</li>
+            </ul>
+          </div>
+          <div className="rounded-xl border bg-muted/20 p-3">
+            <div className="text-xs text-muted-foreground">Placeholder akcji</div>
+            <div className="mt-2 grid grid-cols-1 gap-2 md:grid-cols-2">
+              <button type="button" className="rounded-md border px-3 py-2 text-sm hover:bg-muted/40">Odśwież parametry</button>
+              <button type="button" className="rounded-md border px-3 py-2 text-sm hover:bg-muted/40">Zmień profil</button>
+              <button type="button" className="rounded-md border px-3 py-2 text-sm hover:bg-muted/40">Wyłącz ONT</button>
+              <button type="button" className="rounded-md border px-3 py-2 text-sm hover:bg-muted/40">Włącz ONT</button>
+            </div>
+          </div>
+        </div>
+      </Card>
+    </div>
+  );
+}
+
 function SubscriberEquipment({ s }: { s: SubscriberRecord }) {
   const inventory = useInventorySnapshot();
   const [issueDeviceId, setIssueDeviceId] = useState("");
@@ -278,7 +457,7 @@ function SubscriberEquipment({ s }: { s: SubscriberRecord }) {
         ownership: issueOwnership,
         reason: issueReason,
       });
-      setSuccess("Sprzęt został wydany z magazynu na kartotece abonenta.");
+      setSuccess("Sprzęt został wydany z magazynu na kartotece abonenta. Możesz od razu otworzyć dokument wydania PDF.");
       setIssueReason("Wydanie sprzętu na kartotece abonenta");
       setIssueDeviceId("");
     } catch (err) {
@@ -335,10 +514,27 @@ function SubscriberEquipment({ s }: { s: SubscriberRecord }) {
                       <div className="text-sm font-semibold">{device?.model ?? "Nieznane urządzenie"}</div>
                       <div className="mt-1 text-xs text-muted-foreground">{prettyKind(device?.kind ?? "INNY")} • SN: {device?.serialNo ?? "—"} • MAC: {device?.mac ?? "—"}</div>
                     </div>
-                    <div className="flex flex-wrap gap-2">
+                    <div className="flex flex-wrap items-center justify-end gap-2">
                       <EquipmentBadge value={assignment.ownership} />
                       <EquipmentBadge value={device?.status ?? "KLIENT"} />
                       <EquipmentBadge value={device?.condition ?? "SPRAWNY"} />
+                      {device ? (
+                        <button
+                          type="button"
+                          onClick={() =>
+                            openSubscriberIssuePdf({
+                              subscriber: s,
+                              deviceModel: device.model,
+                              serialNo: device.serialNo,
+                              ownership: assignment.ownership,
+                              issuedAtIso: assignment.issuedAtIso,
+                            })
+                          }
+                          className="rounded-md border px-3 py-1.5 text-xs hover:bg-muted/40"
+                        >
+                          Dokument wydania PDF
+                        </button>
+                      ) : null}
                     </div>
                   </div>
 
@@ -389,7 +585,7 @@ function SubscriberEquipment({ s }: { s: SubscriberRecord }) {
 
         <Card
           title="Wydanie sprzętu z magazynu"
-          desc="Wybierasz urządzenie ze statusu MAGAZYN, określasz czy to sprzedaż czy wypożyczenie i hop — karta klienta staje się jedyną bramką do ruchu klientowego."
+          desc="Wybierasz konkretny egzemplarz po numerze seryjnym, określasz czy to sprzedaż czy wypożyczenie i karta klienta zostaje jedyną bramką do ruchu klientowego. Dzięki temu łatwiej złapać podmiany sprzętu i wiadomo, co realnie zeszło z magazynu."
         >
           <div className="space-y-3">
             <div>
@@ -398,10 +594,15 @@ function SubscriberEquipment({ s }: { s: SubscriberRecord }) {
                 {availableDevices.length === 0 ? <option value="">Brak dostępnych urządzeń</option> : null}
                 {availableDevices.map((device) => (
                   <option key={device.id} value={device.id}>
-                    {prettyKind(device.kind)} • {device.model} • {device.serialNo} • {prettyCondition(device.condition)}
+                    {prettyKind(device.kind)} • {device.model} • SN: {device.serialNo} • {prettyCondition(device.condition)}
                   </option>
                 ))}
               </select>
+              <div className="mt-2 rounded-lg border bg-muted/20 p-3 text-sm">
+                <div><span className="text-muted-foreground">Wybrany model:</span> {availableDevices.find((device) => device.id === issueDeviceId)?.model ?? "—"}</div>
+                <div className="mt-1"><span className="text-muted-foreground">Numer seryjny:</span> {availableDevices.find((device) => device.id === issueDeviceId)?.serialNo ?? "—"}</div>
+                <div className="mt-1"><span className="text-muted-foreground">Stan:</span> {prettyCondition(availableDevices.find((device) => device.id === issueDeviceId)?.condition ?? "SPRAWNY")}</div>
+              </div>
             </div>
             <div>
               <div className="mb-1 text-xs text-muted-foreground">Tryb wydania</div>
@@ -1327,6 +1528,8 @@ export default function SubscriberDetailsPage({ params }: { params: { id: string
           )}
 
           {tab === "sprzet" && <SubscriberEquipment s={s} />}
+
+          {tab === "ont" && <SubscriberOnt s={s} />}
 
           {tab === "avios" && (
             <PlaceholderList
