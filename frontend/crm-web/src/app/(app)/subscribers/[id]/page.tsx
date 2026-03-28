@@ -617,7 +617,14 @@ function SubscriberOnt({ s }: { s: SubscriberRecord }) {
                       >
                         Otwórz ONT: http://{ont.assignment.managementIp}
                       </a>
-                    ) : null}
+                    ) : (
+                      <Link
+                        href="/config/ip/addresses"
+                        className="rounded-md border px-3 py-2 text-sm hover:bg-muted/40"
+                      >
+                        Dodaj adres IP zarządzania
+                      </Link>
+                    )}
 
                     <button
                       type="button"
@@ -703,10 +710,6 @@ function SubscriberEquipment({ s }: { s: SubscriberRecord }) {
     if (!issueDeviceId && availableDevices[0]) setIssueDeviceId(availableDevices[0].id);
   }, [availableDevices, issueDeviceId]);
 
-  useEffect(() => {
-    if (!issueManagementAddressId && managementAddresses[0]) setIssueManagementAddressId(managementAddresses[0].id);
-  }, [managementAddresses, issueManagementAddressId]);
-
   function handleIssue() {
     setError(null);
     setSuccess(null);
@@ -714,7 +717,6 @@ function SubscriberEquipment({ s }: { s: SubscriberRecord }) {
       if (!issueDeviceId) throw new Error("Wybierz urządzenie do wydania");
       if (!issueReason.trim()) throw new Error("Opis wydania nie może być pusty");
       if (!issueAddressPick) throw new Error("Wybierz adres wydania z wyszukiwarki PRG");
-      if (!issueManagementAddressId) throw new Error("Wybierz adres IP zarządzania");
       issueDeviceToSubscriber({
         subscriberId: s.id,
         deviceId: issueDeviceId,
@@ -722,7 +724,7 @@ function SubscriberEquipment({ s }: { s: SubscriberRecord }) {
         reason: issueReason,
         issueAddressText: formatPrgAddressText(issueAddressPick),
         issueAddressLocal,
-        managementIpAddressId: issueManagementAddressId,
+        managementIpAddressId: issueManagementAddressId || undefined,
       });
       setLastIssueDeviceId(issueDeviceId);
       setSuccess("Sprzęt został wydany z magazynu na kartotece abonenta. Możesz od razu zapisać protokół jako PDF.");
@@ -859,7 +861,11 @@ function SubscriberEquipment({ s }: { s: SubscriberRecord }) {
                           <Link href={assignment.managementNetworkId ? `/config/ip/addresses?networkId=${encodeURIComponent(assignment.managementNetworkId)}` : "/config/ip/addresses"} className="rounded-md border px-2 py-1 text-xs hover:bg-muted/40">Sieć zarządzania</Link>
                           <a href={makeOntHttpLink(assignment.managementIp)} target="_blank" rel="noreferrer" className="rounded-md border px-2 py-1 text-xs hover:bg-muted/40">Otwórz ONT</a>
                         </div>
-                      ) : null}
+                      ) : (
+                        <div className="mt-2 flex flex-wrap gap-2">
+                          <Link href="/config/ip/addresses" className="rounded-md border px-2 py-1 text-xs hover:bg-muted/40">Dodaj adres IP zarządzania</Link>
+                        </div>
+                      )}
                       <div className="mt-1"><span className="text-muted-foreground">Powód:</span> {assignment.issueReason}</div>
                     </div>
                     <div className="rounded-lg border bg-muted/20 p-3 space-y-3">
@@ -956,9 +962,10 @@ function SubscriberEquipment({ s }: { s: SubscriberRecord }) {
               <div className="mt-2 text-xs text-muted-foreground">Dla mieszkań i lokali usługowych. Zostaw puste, jeśli sprzęt trafia tylko do budynku.</div>
             </div>
             <div>
-              <div className="mb-1 text-xs text-muted-foreground">Adres IP zarządzania</div>
+              <div className="mb-1 text-xs text-muted-foreground">Adres IP zarządzania (opcjonalnie)</div>
               <select value={issueManagementAddressId} onChange={(event) => setIssueManagementAddressId(event.target.value)} className="w-full rounded-md border border-border bg-background px-3 py-2 text-sm">
-                {managementAddresses.length === 0 ? <option value="">Brak wolnych adresów w sieci zarządzania</option> : null}
+                <option value="">Bez przypisanego IP zarządzania</option>
+                {managementAddresses.length === 0 ? <option value="" disabled>Brak wolnych adresów w sieci zarządzania</option> : null}
                 {managementAddresses.map((address) => {
                   const network = managementNetworks.find((row) => row.id === address.networkId);
                   return (
@@ -977,11 +984,12 @@ function SubscriberEquipment({ s }: { s: SubscriberRecord }) {
                 ) : null}
               </div>
               <div className="mt-2 rounded-lg border bg-muted/20 p-3 text-sm">
-                <div><span className="text-muted-foreground">Wybrany adres IP:</span> {selectedManagementAddress?.ip ?? "—"}</div>
+                <div><span className="text-muted-foreground">Wybrany adres IP:</span> {selectedManagementAddress?.ip ?? "brak — można dodać później"}</div>
                 <div className="mt-1"><span className="text-muted-foreground">Sieć:</span> {selectedManagementNetwork?.cidr ?? "—"}</div>
                 <div className="mt-1"><span className="text-muted-foreground">Gateway:</span> {selectedManagementAddress?.gateway ?? "—"}</div>
                 <div className="mt-1"><span className="text-muted-foreground">MAC urządzenia:</span> {availableDevices.find((device) => device.id === issueDeviceId)?.mac ?? "—"}</div>
               </div>
+              <div className="mt-2 text-xs text-muted-foreground">Adres IP zarządzania nie jest wymagany przy wydaniu. Jeśli dziś go nie znasz, dodasz go później z poziomu urządzenia.</div>
             </div>
             <div>
               <div className="mb-1 text-xs text-muted-foreground">Opis wydania</div>
@@ -1141,6 +1149,7 @@ function SubscriberEquipment({ s }: { s: SubscriberRecord }) {
           <div className="mt-1"><span className="text-muted-foreground">Tryb:</span> {issueOwnership === "SPRZEDANY" ? "sprzedany" : "wypożyczenie"}</div>
           <div className="mt-1"><span className="text-muted-foreground">Adres wydania:</span> {formatPrgAddressText(issueAddressPick, issueAddressLocal) || "—"}</div>
           <div className="mt-1"><span className="text-muted-foreground">Lokal:</span> {issueAddressLocal.trim() || "—"}</div>
+          <div className="mt-1"><span className="text-muted-foreground">Adres IP zarządzania:</span> {selectedManagementAddress?.ip ?? "brak — dodasz później"}</div>
         </div>
         {!issueReason.trim() ? (
           <div className="rounded-lg border border-red-500/30 bg-red-500/10 px-3 py-2 text-sm text-red-700 dark:text-red-300">

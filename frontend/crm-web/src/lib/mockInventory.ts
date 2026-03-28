@@ -483,7 +483,7 @@ export function issueDeviceToSubscriber(args: {
   reason: string;
   issueAddressText: string;
   issueAddressLocal?: string;
-  managementIpAddressId: string;
+  managementIpAddressId?: string;
   actor?: string;
 }) {
   const reason = args.reason?.trim();
@@ -491,8 +491,6 @@ export function issueDeviceToSubscriber(args: {
   const issueAddressLocal = args.issueAddressLocal?.trim();
   if (!reason) throw new Error("Powód wydania jest wymagany");
   if (!issueAddressText) throw new Error("Adres wydania z PRG jest wymagany");
-  if (!args.managementIpAddressId) throw new Error("Adres IP zarządzania jest wymagany");
-
   const before = STATE.devices.find((device) => device.id === args.deviceId);
   if (!before) throw new Error("Nie znaleziono urządzenia");
   if (before.status !== "MAGAZYN") throw new Error("Wydać do klienta można tylko sprzęt ze statusu MAGAZYN");
@@ -502,18 +500,23 @@ export function issueDeviceToSubscriber(args: {
   if (activeAssignment) throw new Error("Urządzenie jest już przypisane do abonenta");
 
   const ipam = getIpamState();
-  const managementAddress = ipam.addresses.find((row) => row.id === args.managementIpAddressId);
-  if (!managementAddress) throw new Error("Nie znaleziono adresu IP zarządzania");
-  if (managementAddress.status !== "FREE") throw new Error("Wybrany adres IP zarządzania nie jest już wolny");
-  const managementNetwork = ipam.networks.find((row) => row.id === managementAddress.networkId);
-  if (!managementNetwork || managementNetwork.poolKind !== "INFRA") throw new Error("Adres IP zarządzania musi pochodzić z sieci INFRA");
+  let managementAddress: ReturnType<typeof getIpamState>["addresses"][number] | undefined;
+  let managementNetwork: ReturnType<typeof getIpamState>["networks"][number] | undefined;
 
-  assignAddress(args.managementIpAddressId, {
-    customerName: `${args.subscriberId} • ${before.serialNo}`,
-    mode: managementNetwork.assignmentMode === "DHCP" ? "DHCP" : "STATIC",
-    description: `Management ${before.model} / ${before.serialNo}`,
-    mac: before.mac,
-  });
+  if (args.managementIpAddressId) {
+    managementAddress = ipam.addresses.find((row) => row.id === args.managementIpAddressId);
+    if (!managementAddress) throw new Error("Nie znaleziono adresu IP zarządzania");
+    if (managementAddress.status !== "FREE") throw new Error("Wybrany adres IP zarządzania nie jest już wolny");
+    managementNetwork = ipam.networks.find((row) => row.id === managementAddress?.networkId);
+    if (!managementNetwork || managementNetwork.poolKind !== "INFRA") throw new Error("Adres IP zarządzania musi pochodzić z sieci INFRA");
+
+    assignAddress(args.managementIpAddressId, {
+      customerName: `${args.subscriberId} • ${before.serialNo}`,
+      mode: managementNetwork.assignmentMode === "DHCP" ? "DHCP" : "STATIC",
+      description: `Management ${before.model} / ${before.serialNo}`,
+      mac: before.mac,
+    });
+  }
 
   const after: InventoryDevice = { ...before, status: "KLIENT", updatedAtIso: nowIso() };
   const assignment: SubscriberDeviceAssignment = {
@@ -527,9 +530,9 @@ export function issueDeviceToSubscriber(args: {
     issueAddressText,
     issueAddressLocal: issueAddressLocal || undefined,
     managementIpAddressId: args.managementIpAddressId,
-    managementIp: managementAddress.ip,
-    managementNetworkId: managementAddress.networkId,
-    managementNetworkCidr: managementNetwork.cidr,
+    managementIp: managementAddress?.ip,
+    managementNetworkId: managementAddress?.networkId,
+    managementNetworkCidr: managementNetwork?.cidr,
   };
 
   let next: InventoryState = {
@@ -566,7 +569,7 @@ export function issueDeviceToSubscriber(args: {
         ownership: args.ownership,
         issueAddressText,
         issueAddressLocal: issueAddressLocal || undefined,
-        managementIp: managementAddress.ip,
+        managementIp: managementAddress?.ip,
       },
     }),
   };
