@@ -254,6 +254,17 @@ function seedState(): IpamState {
   const a1 = addrsFrom(n1);
   const a2 = addrsFrom(n2);
 
+  const seededMgmt = a2.find((row) => row.ip === "10.10.0.10");
+  if (seededMgmt) {
+    seededMgmt.id = "seed-ip-10-10-0-10";
+    seededMgmt.status = "ASSIGNED";
+    seededMgmt.mode = "STATIC";
+    seededMgmt.customerName = "sub_0001 • FTECH01-0002";
+    seededMgmt.assignedAtIso = now;
+    seededMgmt.description = "Management FTECH 01 / FTECH01-0002";
+    seededMgmt.mac = "AA:BB:CC:00:00:02";
+  }
+
   if (a1.length > 0) {
     a1[0] = {
       ...a1[0],

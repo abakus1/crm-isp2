@@ -7,6 +7,7 @@ import { useEffect, useMemo, useState, useSyncExternalStore } from "react";
 import { SimpleModal } from "@/components/SimpleModal";
 import { PrgAddressFinder, type PrgAddressPick } from "@/components/PrgAddressFinder";
 import { ApiError, apiFetch } from "@/lib/api";
+import { getIpamState, subscribeIpam } from "@/lib/mockIpam";
 
 import { SubscriberPaymentPlan } from "./SubscriberPaymentPlan";
 import { getStaffLabel, getTasksForSubscriber } from "@/lib/mockTasks";
@@ -22,7 +23,7 @@ import {
   returnDeviceFromSubscriber,
   subscribeInventory,
   getInventoryState,
-  getActiveOntForSubscriber,
+  getActiveOntsForSubscriber,
 } from "@/lib/mockInventory";
 
 type TabKey =
@@ -254,6 +255,20 @@ function useInventorySnapshot() {
   return useSyncExternalStore(subscribeInventory, getInventoryState, getInventoryState);
 }
 
+
+function useIpamSnapshot() {
+  return useSyncExternalStore(subscribeIpam, getIpamState, getIpamState);
+}
+
+function formatPrgAddressText(pick: PrgAddressPick | null | undefined) {
+  if (!pick) return "";
+  return [pick.place_name, `ul. ${pick.street_name}`, pick.building_no].filter(Boolean).join(", ");
+}
+
+function makeOntHttpLink(ip?: string) {
+  return ip ? `http://${ip}` : "#";
+}
+
 function equipmentBadgeClass(kind: string) {
   if (kind === "SPRZEDANY") return "border-fuchsia-500/30 bg-fuchsia-500/10 text-fuchsia-700 dark:text-fuchsia-300";
   if (kind === "WYPOZYCZENIE") return "border-cyan-500/30 bg-cyan-500/10 text-cyan-700 dark:text-cyan-300";
@@ -284,6 +299,9 @@ function openSubscriberIssuePdf(args: {
   ownership: "SPRZEDANY" | "WYPOZYCZENIE";
   issuedAtIso: string;
   issueReason?: string;
+  issueAddressText?: string;
+  managementIp?: string;
+  managementNetworkCidr?: string;
 }) {
   if (typeof window === "undefined") return;
 
@@ -352,6 +370,9 @@ function openSubscriberIssuePdf(args: {
       <div class="row"><div class="label">Numer seryjny</div><div class="value">${escapeHtml(args.serialNo)}</div></div>
       <div class="row"><div class="label">MAC</div><div class="value">${escapeHtml(args.mac || "—")}</div></div>
       <div class="row"><div class="label">Tryb przekazania</div><div class="value">${escapeHtml(issueType)}</div></div>
+      <div class="row"><div class="label">Adres wydania (PRG)</div><div class="value">${escapeHtml(args.issueAddressText || "—")}</div></div>
+      <div class="row"><div class="label">Adres IP zarządzania</div><div class="value">${escapeHtml(args.managementIp || "—")}</div></div>
+      <div class="row"><div class="label">Sieć zarządzania</div><div class="value">${escapeHtml(args.managementNetworkCidr || "—")}</div></div>
     </div>
   </div>
 
@@ -388,6 +409,9 @@ function openSubscriberReturnPdf(args: {
   returnedAtIso: string;
   returnCondition: DeviceCondition;
   returnReason?: string;
+  issueAddressText?: string;
+  managementIp?: string;
+  managementNetworkCidr?: string;
 }) {
   if (typeof window === "undefined") return;
 
@@ -455,6 +479,9 @@ function openSubscriberReturnPdf(args: {
       <div class="row"><div class="label">Numer seryjny</div><div class="value">${escapeHtml(args.serialNo)}</div></div>
       <div class="row"><div class="label">MAC</div><div class="value">${escapeHtml(args.mac || "—")}</div></div>
       <div class="row"><div class="label">Stan przy zwrocie</div><div class="value">${escapeHtml(prettyCondition(args.returnCondition))}</div></div>
+      <div class="row"><div class="label">Adres wydania (PRG)</div><div class="value">${escapeHtml(args.issueAddressText || "—")}</div></div>
+      <div class="row"><div class="label">Adres IP zarządzania</div><div class="value">${escapeHtml(args.managementIp || "—")}</div></div>
+      <div class="row"><div class="label">Sieć zarządzania</div><div class="value">${escapeHtml(args.managementNetworkCidr || "—")}</div></div>
     </div>
   </div>
 
@@ -483,9 +510,9 @@ function openSubscriberReturnPdf(args: {
 
 function SubscriberOnt({ s }: { s: SubscriberRecord }) {
   const inventory = useInventorySnapshot();
-  const ont = useMemo(() => getActiveOntForSubscriber(s.id), [inventory, s.id]);
+  const onts = useMemo(() => getActiveOntsForSubscriber(s.id), [inventory, s.id]);
 
-  if (!ont) {
+  if (onts.length === 0) {
     return (
       <Card
         title="ONT abonenta"
@@ -498,34 +525,76 @@ function SubscriberOnt({ s }: { s: SubscriberRecord }) {
     );
   }
 
-  const telemetry = ont.telemetry;
-
   return (
-    <div className="grid grid-cols-1 gap-4 xl:grid-cols-[1.05fr_0.95fr]">
+    <div className="space-y-4">
       <Card
         title="ONT abonenta"
-        desc="Po wydaniu ONT z karty abonenta tutaj czytamy status i przygotowujemy miejsce pod provisioning. Dzięki temu sprzęt, profil i klient siedzą w jednym kontekście — jak cywilizowani ludzie, nie jak plik Excel po trzech kawach."
+        desc="Jeśli klient ma dwa ONT-y, to tutaj pokazujemy oba. Każdy z własnym adresem wydania, IP zarządzania i szybkim linkiem do panelu urządzenia — bez zgadywania, który klocek siedzi w którym lokalu."
       >
-        <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
-          <div className="rounded-xl border bg-muted/20 p-3">
-            <div className="text-xs text-muted-foreground">Status urządzenia</div>
-            <div className="mt-2 text-xl font-semibold">{telemetry?.enabled ? "Włączony" : "Wyłączony"}</div>
-            <div className="mt-1 text-xs text-muted-foreground">Ostatni odczyt: {formatDateTime(telemetry?.lastSeenAtIso)}</div>
-          </div>
-          <div className="rounded-xl border bg-muted/20 p-3">
-            <div className="text-xs text-muted-foreground">Aktualny profil</div>
-            <div className="mt-2 text-xl font-semibold">{telemetry?.profileName ?? "Do konfiguracji"}</div>
-            <div className="mt-1 text-xs text-muted-foreground">Moc sygnału: {telemetry?.signalPowerDbm ?? "brak odczytu"}</div>
-          </div>
-        </div>
+        <div className="grid grid-cols-1 gap-4 xl:grid-cols-2">
+          {onts.map((ont) => {
+            const telemetry = ont.telemetry;
+            return (
+              <div key={ont.assignment.id} className="rounded-xl border p-4">
+                <div className="flex flex-wrap items-start justify-between gap-3">
+                  <div>
+                    <div className="text-sm font-semibold">{ont.device.model}</div>
+                    <div className="mt-1 text-xs text-muted-foreground">SN: {ont.device.serialNo} • MAC: {ont.device.mac ?? "—"}</div>
+                  </div>
+                  <div className="flex flex-wrap gap-2">
+                    <EquipmentBadge value={telemetry?.enabled ? "WŁĄCZONY" : "WYŁĄCZONY"} />
+                    <EquipmentBadge value={ont.assignment.ownership} />
+                  </div>
+                </div>
 
-        <div className="mt-4 space-y-2 rounded-xl border p-3">
-          <KV k="Model" v={ont.device.model} />
-          <KV k="Numer seryjny" v={ont.device.serialNo} />
-          <KV k="MAC" v={ont.device.mac ?? "—"} />
-          <KV k="Tryb wydania" v={ont.assignment.ownership === "SPRZEDANY" ? "sprzedany" : "wypożyczenie"} />
-          <KV k="Wydano" v={formatDateTime(ont.assignment.issuedAtIso)} />
-          <KV k="Ostatni powód wyłączenia" v={telemetry?.lastDisableReason ?? "Brak"} />
+                <div className="mt-4 grid grid-cols-1 gap-3 md:grid-cols-2">
+                  <div className="rounded-xl border bg-muted/20 p-3">
+                    <div className="text-xs text-muted-foreground">Status urządzenia</div>
+                    <div className="mt-2 text-xl font-semibold">{telemetry?.enabled ? "Włączony" : "Wyłączony"}</div>
+                    <div className="mt-1 text-xs text-muted-foreground">Ostatni odczyt: {formatDateTime(telemetry?.lastSeenAtIso)}</div>
+                  </div>
+                  <div className="rounded-xl border bg-muted/20 p-3">
+                    <div className="text-xs text-muted-foreground">Aktualny profil</div>
+                    <div className="mt-2 text-xl font-semibold">{telemetry?.profileName ?? "Do konfiguracji"}</div>
+                    <div className="mt-1 text-xs text-muted-foreground">Moc sygnału: {telemetry?.signalPowerDbm ?? "brak odczytu"}</div>
+                  </div>
+                </div>
+
+                <div className="mt-4 space-y-2 rounded-xl border p-3">
+                  <KV k="Model" v={ont.device.model} />
+                  <KV k="Numer seryjny" v={ont.device.serialNo} />
+                  <KV k="MAC" v={ont.device.mac ?? "—"} />
+                  <KV k="Tryb wydania" v={ont.assignment.ownership === "SPRZEDANY" ? "sprzedany" : "wypożyczenie"} />
+                  <KV k="Wydano" v={formatDateTime(ont.assignment.issuedAtIso)} />
+                  <KV k="Adres wydania" v={ont.assignment.issueAddressText ?? "—"} />
+                  <KV k="IP zarządzania" v={ont.assignment.managementIp ?? "—"} />
+                  <KV k="Sieć zarządzania" v={ont.assignment.managementNetworkCidr ?? "—"} />
+                  <KV k="Ostatni powód wyłączenia" v={telemetry?.lastDisableReason ?? "Brak"} />
+                </div>
+
+                <div className="mt-4 flex flex-wrap gap-2">
+                  {ont.assignment.managementNetworkId ? (
+                    <Link
+                      href={`/config/ip/addresses?networkId=${encodeURIComponent(ont.assignment.managementNetworkId)}`}
+                      className="rounded-md border px-3 py-2 text-sm hover:bg-muted/40"
+                    >
+                      Otwórz sieć zarządzania
+                    </Link>
+                  ) : null}
+                  {ont.assignment.managementIp ? (
+                    <a
+                      href={makeOntHttpLink(ont.assignment.managementIp)}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="rounded-md border px-3 py-2 text-sm hover:bg-muted/40"
+                    >
+                      Otwórz ONT: http://{ont.assignment.managementIp}
+                    </a>
+                  ) : null}
+                </div>
+              </div>
+            );
+          })}
         </div>
       </Card>
 
@@ -545,7 +614,7 @@ function SubscriberOnt({ s }: { s: SubscriberRecord }) {
           </div>
           <div className="rounded-xl border bg-muted/20 p-3">
             <div className="text-xs text-muted-foreground">Placeholder akcji</div>
-            <div className="mt-2 grid grid-cols-1 gap-2 md:grid-cols-2">
+            <div className="mt-2 grid grid-cols-1 gap-2 md:grid-cols-2 xl:grid-cols-4">
               <button type="button" className="rounded-md border px-3 py-2 text-sm hover:bg-muted/40">Odśwież parametry</button>
               <button type="button" className="rounded-md border px-3 py-2 text-sm hover:bg-muted/40">Zmień profil</button>
               <button type="button" className="rounded-md border px-3 py-2 text-sm hover:bg-muted/40">Wyłącz ONT</button>
@@ -554,16 +623,18 @@ function SubscriberOnt({ s }: { s: SubscriberRecord }) {
           </div>
         </div>
       </Card>
-
     </div>
   );
 }
 
 function SubscriberEquipment({ s }: { s: SubscriberRecord }) {
   const inventory = useInventorySnapshot();
+  const ipam = useIpamSnapshot();
   const [issueDeviceId, setIssueDeviceId] = useState("");
   const [issueOwnership, setIssueOwnership] = useState<"SPRZEDANY" | "WYPOZYCZENIE">("WYPOZYCZENIE");
   const [issueReason, setIssueReason] = useState("");
+  const [issueAddressPick, setIssueAddressPick] = useState<PrgAddressPick | null>(null);
+  const [issueManagementAddressId, setIssueManagementAddressId] = useState("");
   const [returnReasonById, setReturnReasonById] = useState<Record<string, string>>({});
   const [returnConditionById, setReturnConditionById] = useState<Record<string, DeviceCondition>>({});
   const [confirmIssueOpen, setConfirmIssueOpen] = useState(false);
@@ -575,6 +646,10 @@ function SubscriberEquipment({ s }: { s: SubscriberRecord }) {
 
   const assignments = useMemo(() => getDeviceAssignmentsForSubscriber(s.id), [inventory, s.id]);
   const availableDevices = useMemo(() => getAvailableDevicesForSubscriberIssue(), [inventory]);
+  const managementNetworks = useMemo(() => ipam.networks.filter((row) => row.poolKind === "INFRA"), [ipam]);
+  const managementAddresses = useMemo(() => ipam.addresses.filter((row) => row.status === "FREE" && managementNetworks.some((net) => net.id === row.networkId)), [ipam, managementNetworks]);
+  const selectedManagementAddress = useMemo(() => managementAddresses.find((row) => row.id === issueManagementAddressId) ?? null, [managementAddresses, issueManagementAddressId]);
+  const selectedManagementNetwork = useMemo(() => managementNetworks.find((row) => row.id === selectedManagementAddress?.networkId) ?? null, [managementNetworks, selectedManagementAddress]);
   const activeAssignments = assignments.filter((row) => row.assignment.returnAtIso == null && row.device);
   const historyAssignments = assignments.filter((row) => row.assignment.returnAtIso != null && row.device);
 
@@ -582,22 +657,32 @@ function SubscriberEquipment({ s }: { s: SubscriberRecord }) {
     if (!issueDeviceId && availableDevices[0]) setIssueDeviceId(availableDevices[0].id);
   }, [availableDevices, issueDeviceId]);
 
+  useEffect(() => {
+    if (!issueManagementAddressId && managementAddresses[0]) setIssueManagementAddressId(managementAddresses[0].id);
+  }, [managementAddresses, issueManagementAddressId]);
+
   function handleIssue() {
     setError(null);
     setSuccess(null);
     try {
       if (!issueDeviceId) throw new Error("Wybierz urządzenie do wydania");
       if (!issueReason.trim()) throw new Error("Opis wydania nie może być pusty");
+      if (!issueAddressPick) throw new Error("Wybierz adres wydania z wyszukiwarki PRG");
+      if (!issueManagementAddressId) throw new Error("Wybierz adres IP zarządzania");
       issueDeviceToSubscriber({
         subscriberId: s.id,
         deviceId: issueDeviceId,
         ownership: issueOwnership,
         reason: issueReason,
+        issueAddressText: formatPrgAddressText(issueAddressPick),
+        managementIpAddressId: issueManagementAddressId,
       });
       setLastIssueDeviceId(issueDeviceId);
       setSuccess("Sprzęt został wydany z magazynu na kartotece abonenta. Możesz od razu zapisać protokół jako PDF.");
       setIssueReason("");
       setIssueDeviceId("");
+      setIssueAddressPick(null);
+      setIssueManagementAddressId("");
       setConfirmIssueOpen(false);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Nie udało się wydać sprzętu.");
@@ -675,6 +760,9 @@ function SubscriberEquipment({ s }: { s: SubscriberRecord }) {
                               ownership: assignment.ownership,
                               issuedAtIso: assignment.issuedAtIso,
                               issueReason: assignment.issueReason,
+                              issueAddressText: assignment.issueAddressText,
+                              managementIp: assignment.managementIp,
+                              managementNetworkCidr: assignment.managementNetworkCidr,
                             })
                           }
                           className="rounded-md border px-3 py-1.5 text-xs hover:bg-muted/40"
@@ -693,9 +781,12 @@ function SubscriberEquipment({ s }: { s: SubscriberRecord }) {
                               serialNo: device.serialNo,
                               mac: device.mac,
                               ownership: assignment.ownership,
-                              returnedAtIso: assignment.returnAtIso,
+                              returnedAtIso: assignment.returnAtIso!,
                               returnCondition: assignment.returnCondition ?? device.condition,
                               returnReason: assignment.returnReason,
+                              issueAddressText: assignment.issueAddressText,
+                              managementIp: assignment.managementIp,
+                              managementNetworkCidr: assignment.managementNetworkCidr,
                             })
                           }
                           className="rounded-md border px-3 py-1.5 text-xs hover:bg-muted/40"
@@ -710,6 +801,14 @@ function SubscriberEquipment({ s }: { s: SubscriberRecord }) {
                     <div className="rounded-lg border bg-muted/20 p-3 text-sm">
                       <div><span className="text-muted-foreground">Wydano:</span> {formatDateTime(assignment.issuedAtIso)}</div>
                       <div className="mt-1"><span className="text-muted-foreground">Tryb:</span> {assignment.ownership === "SPRZEDANY" ? "sprzedany" : "wypożyczenie"}</div>
+                      <div className="mt-1"><span className="text-muted-foreground">Adres wydania:</span> {assignment.issueAddressText ?? "—"}</div>
+                      <div className="mt-1"><span className="text-muted-foreground">IP zarządzania:</span> {assignment.managementIp ?? "—"}</div>
+                      {assignment.managementIp ? (
+                        <div className="mt-2 flex flex-wrap gap-2">
+                          <Link href={assignment.managementNetworkId ? `/config/ip/addresses?networkId=${encodeURIComponent(assignment.managementNetworkId)}` : "/config/ip/addresses"} className="rounded-md border px-2 py-1 text-xs hover:bg-muted/40">Sieć zarządzania</Link>
+                          <a href={makeOntHttpLink(assignment.managementIp)} target="_blank" rel="noreferrer" className="rounded-md border px-2 py-1 text-xs hover:bg-muted/40">Otwórz ONT</a>
+                        </div>
+                      ) : null}
                       <div className="mt-1"><span className="text-muted-foreground">Powód:</span> {assignment.issueReason}</div>
                     </div>
                     <div className="rounded-lg border bg-muted/20 p-3 space-y-3">
@@ -784,6 +883,44 @@ function SubscriberEquipment({ s }: { s: SubscriberRecord }) {
                 </button>
               </div>
             </div>
+            <div className="rounded-xl border p-3">
+              <PrgAddressFinder
+                title="Adres fizycznego wydania (PRG)"
+                description={`Wybierz dokładny adres z PRG, żebyśmy wiedzieli, gdzie ten egzemplarz realnie trafił. Bez tego potem jest klasyczne: "ONT był gdzieś tu... chyba".`}
+                onPick={setIssueAddressPick}
+              />
+              <div className="mt-3 rounded-lg border bg-muted/20 p-3 text-sm">
+                <div><span className="text-muted-foreground">Wybrany adres:</span> {formatPrgAddressText(issueAddressPick) || "—"}</div>
+              </div>
+            </div>
+            <div>
+              <div className="mb-1 text-xs text-muted-foreground">Adres IP zarządzania</div>
+              <select value={issueManagementAddressId} onChange={(event) => setIssueManagementAddressId(event.target.value)} className="w-full rounded-md border border-border bg-background px-3 py-2 text-sm">
+                {managementAddresses.length === 0 ? <option value="">Brak wolnych adresów w sieci zarządzania</option> : null}
+                {managementAddresses.map((address) => {
+                  const network = managementNetworks.find((row) => row.id === address.networkId);
+                  return (
+                    <option key={address.id} value={address.id}>
+                      {address.ip} • {network?.cidr ?? "brak sieci"} • {network?.description ?? "sieć zarządzania"}
+                    </option>
+                  );
+                })}
+              </select>
+              <div className="mt-2 flex flex-wrap gap-2">
+                <Link href="/config/ip/addresses" className="rounded-md border px-3 py-2 text-sm hover:bg-muted/40">Otwórz magazyn IP</Link>
+                {selectedManagementAddress?.ip ? (
+                  <a href={makeOntHttpLink(selectedManagementAddress.ip)} target="_blank" rel="noreferrer" className="rounded-md border px-3 py-2 text-sm hover:bg-muted/40">
+                    Test linku do urządzenia: http://{selectedManagementAddress.ip}
+                  </a>
+                ) : null}
+              </div>
+              <div className="mt-2 rounded-lg border bg-muted/20 p-3 text-sm">
+                <div><span className="text-muted-foreground">Wybrany adres IP:</span> {selectedManagementAddress?.ip ?? "—"}</div>
+                <div className="mt-1"><span className="text-muted-foreground">Sieć:</span> {selectedManagementNetwork?.cidr ?? "—"}</div>
+                <div className="mt-1"><span className="text-muted-foreground">Gateway:</span> {selectedManagementAddress?.gateway ?? "—"}</div>
+                <div className="mt-1"><span className="text-muted-foreground">MAC urządzenia:</span> {availableDevices.find((device) => device.id === issueDeviceId)?.mac ?? "—"}</div>
+              </div>
+            </div>
             <div>
               <div className="mb-1 text-xs text-muted-foreground">Opis wydania</div>
               <textarea rows={3} value={issueReason} onChange={(event) => setIssueReason(event.target.value)} placeholder="Opisz powód wydania sprzętu" className="w-full rounded-md border border-border bg-background px-3 py-2 text-sm" />
@@ -798,22 +935,26 @@ function SubscriberEquipment({ s }: { s: SubscriberRecord }) {
             {lastIssueDeviceId ? (() => {
               const assignment = getDeviceAssignmentsForSubscriber(s.id).find((row) => row.device?.id === lastIssueDeviceId && !row.assignment.returnAtIso);
               if (!assignment?.device) return null;
+              const device = assignment.device;
               return (
                 <div className="rounded-lg border bg-muted/20 p-3 text-sm">
                   <div className="font-medium">Ostatnio wydany sprzęt</div>
-                  <div className="mt-1 text-muted-foreground">{assignment.device.model} • SN: {assignment.device.serialNo}</div>
+                  <div className="mt-1 text-muted-foreground">{device.model} • SN: {device.serialNo}</div>
                   <button
                     type="button"
                     onClick={() =>
                       openSubscriberIssuePdf({
                         subscriber: s,
-                        deviceKind: prettyKind(assignment.device.kind),
-                        deviceModel: assignment.device.model,
-                        serialNo: assignment.device.serialNo,
-                        mac: assignment.device.mac,
+                        deviceKind: prettyKind(device.kind),
+                        deviceModel: device.model,
+                        serialNo: device.serialNo,
+                        mac: device.mac,
                         ownership: assignment.assignment.ownership,
                         issuedAtIso: assignment.assignment.issuedAtIso,
                         issueReason: assignment.assignment.issueReason,
+                        issueAddressText: assignment.assignment.issueAddressText,
+                        managementIp: assignment.assignment.managementIp,
+                        managementNetworkCidr: assignment.assignment.managementNetworkCidr,
                       })
                     }
                     className="mt-3 rounded-md border px-3 py-2 text-sm hover:bg-muted/40"
@@ -827,22 +968,23 @@ function SubscriberEquipment({ s }: { s: SubscriberRecord }) {
             {lastReturnDeviceId ? (() => {
               const assignment = getDeviceAssignmentsForSubscriber(s.id).find((row) => row.device?.id === lastReturnDeviceId && !!row.assignment.returnAtIso);
               if (!assignment?.device || !assignment.assignment.returnAtIso) return null;
+              const device = assignment.device;
               return (
                 <div className="rounded-lg border bg-muted/20 p-3 text-sm">
                   <div className="font-medium">Ostatnio zwrócony sprzęt</div>
-                  <div className="mt-1 text-muted-foreground">{assignment.device.model} • SN: {assignment.device.serialNo}</div>
+                  <div className="mt-1 text-muted-foreground">{device.model} • SN: {device.serialNo}</div>
                   <button
                     type="button"
                     onClick={() =>
                       openSubscriberReturnPdf({
                         subscriber: s,
-                        deviceKind: prettyKind(assignment.device.kind),
-                        deviceModel: assignment.device.model,
-                        serialNo: assignment.device.serialNo,
-                        mac: assignment.device.mac,
+                        deviceKind: prettyKind(device.kind),
+                        deviceModel: device.model,
+                        serialNo: device.serialNo,
+                        mac: device.mac,
                         ownership: assignment.assignment.ownership,
-                        returnedAtIso: assignment.assignment.returnAtIso,
-                        returnCondition: assignment.assignment.returnCondition ?? assignment.device.condition,
+                        returnedAtIso: assignment.assignment.returnAtIso!,
+                        returnCondition: assignment.assignment.returnCondition ?? device.condition,
                         returnReason: assignment.assignment.returnReason,
                       })
                     }
@@ -888,7 +1030,7 @@ function SubscriberEquipment({ s }: { s: SubscriberRecord }) {
                             serialNo: device.serialNo,
                             mac: device.mac,
                             ownership: assignment.ownership,
-                            returnedAtIso: assignment.returnAtIso,
+                            returnedAtIso: assignment.returnAtIso!,
                             returnCondition: assignment.returnCondition ?? device.condition,
                             returnReason: assignment.returnReason,
                           })

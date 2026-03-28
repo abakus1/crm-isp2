@@ -1,5 +1,7 @@
 "use client";
 
+import { assignAddress, getIpamState, unassignAddress } from "@/lib/mockIpam";
+
 // UI-only: Magazyn urządzeń (inventory) – mock store bez backendu.
 // Cel: szybki panel dla operatora (przegląd + historia + dokument wejścia).
 
@@ -62,6 +64,11 @@ export type SubscriberDeviceAssignment = {
   issuedAtIso: string;
   issuedBy: string;
   issueReason: string;
+  issueAddressText?: string;
+  managementIpAddressId?: string;
+  managementIp?: string;
+  managementNetworkId?: string;
+  managementNetworkCidr?: string;
   returnAtIso?: string;
   returnedBy?: string;
   returnReason?: string;
@@ -214,6 +221,10 @@ function seedState(): InventoryState {
       issuedAtIso: "2026-02-10T12:00:00.000Z",
       issuedBy: DEFAULT_ACTOR,
       issueReason: "Wydanie ONT do instalacji FTTH",
+      issueAddressText: "Kraków, ul. Promienistych 11/4",
+      managementIpAddressId: "seed-ip-10-10-0-10",
+      managementIp: "10.10.0.10",
+      managementNetworkCidr: "10.10.0.0/24",
     },
   ];
 
@@ -468,10 +479,15 @@ export function issueDeviceToSubscriber(args: {
   deviceId: string;
   ownership: SubscriberDeviceOwnership;
   reason: string;
+  issueAddressText: string;
+  managementIpAddressId: string;
   actor?: string;
 }) {
   const reason = args.reason?.trim();
+  const issueAddressText = args.issueAddressText?.trim();
   if (!reason) throw new Error("Powód wydania jest wymagany");
+  if (!issueAddressText) throw new Error("Adres wydania z PRG jest wymagany");
+  if (!args.managementIpAddressId) throw new Error("Adres IP zarządzania jest wymagany");
 
   const before = STATE.devices.find((device) => device.id === args.deviceId);
   if (!before) throw new Error("Nie znaleziono urządzenia");
@@ -480,6 +496,20 @@ export function issueDeviceToSubscriber(args: {
 
   const activeAssignment = STATE.subscriberAssignments.find((row) => row.deviceId === args.deviceId && !row.returnAtIso);
   if (activeAssignment) throw new Error("Urządzenie jest już przypisane do abonenta");
+
+  const ipam = getIpamState();
+  const managementAddress = ipam.addresses.find((row) => row.id === args.managementIpAddressId);
+  if (!managementAddress) throw new Error("Nie znaleziono adresu IP zarządzania");
+  if (managementAddress.status !== "FREE") throw new Error("Wybrany adres IP zarządzania nie jest już wolny");
+  const managementNetwork = ipam.networks.find((row) => row.id === managementAddress.networkId);
+  if (!managementNetwork || managementNetwork.poolKind !== "INFRA") throw new Error("Adres IP zarządzania musi pochodzić z sieci INFRA");
+
+  assignAddress(args.managementIpAddressId, {
+    customerName: `${args.subscriberId} • ${before.serialNo}`,
+    mode: managementNetwork.assignmentMode === "DHCP" ? "DHCP" : "STATIC",
+    description: `Management ${before.model} / ${before.serialNo}`,
+    mac: before.mac,
+  });
 
   const after: InventoryDevice = { ...before, status: "KLIENT", updatedAtIso: nowIso() };
   const assignment: SubscriberDeviceAssignment = {
@@ -490,6 +520,11 @@ export function issueDeviceToSubscriber(args: {
     issuedAtIso: after.updatedAtIso,
     issuedBy: args.actor ?? DEFAULT_ACTOR,
     issueReason: reason,
+    issueAddressText,
+    managementIpAddressId: args.managementIpAddressId,
+    managementIp: managementAddress.ip,
+    managementNetworkId: managementAddress.networkId,
+    managementNetworkCidr: managementNetwork.cidr,
   };
 
   let next: InventoryState = {
@@ -521,7 +556,7 @@ export function issueDeviceToSubscriber(args: {
       actor: assignment.issuedBy,
       before: { status: before.status },
       after: { status: "KLIENT" },
-      meta: { subscriberId: args.subscriberId, ownership: args.ownership },
+      meta: { subscriberId: args.subscriberId, ownership: args.ownership, issueAddressText, managementIp: managementAddress.ip },
     }),
   };
 
@@ -544,6 +579,10 @@ export function returnDeviceFromSubscriber(args: {
 
   const assignment = STATE.subscriberAssignments.find((row) => row.deviceId === args.deviceId && row.subscriberId === args.subscriberId && !row.returnAtIso);
   if (!assignment) throw new Error("To urządzenie nie jest aktywnie przypisane do tego abonenta");
+
+  if (assignment.managementIpAddressId) {
+    unassignAddress(assignment.managementIpAddressId);
+  }
 
   const after: InventoryDevice = {
     ...before,
@@ -588,16 +627,21 @@ export function returnDeviceFromSubscriber(args: {
 }
 
 
+export function getActiveOntsForSubscriber(subscriberId: string) {
+  return STATE.subscriberAssignments
+    .filter((row) => row.subscriberId === subscriberId && !row.returnAtIso)
+    .map((assignment) => {
+      const device = STATE.devices.find((row) => row.id === assignment.deviceId && row.kind === "ONT");
+      if (!device) return null;
+      return {
+        assignment,
+        device,
+        telemetry: STATE.ontTelemetryByDeviceId[device.id] ?? null,
+      };
+    })
+    .filter(Boolean) as Array<{ assignment: SubscriberDeviceAssignment; device: InventoryDevice; telemetry: OntDeviceTelemetry | null }>;
+}
+
 export function getActiveOntForSubscriber(subscriberId: string) {
-  const activeAssignment = STATE.subscriberAssignments.find((row) => row.subscriberId === subscriberId && !row.returnAtIso);
-  if (!activeAssignment) return null;
-
-  const device = STATE.devices.find((row) => row.id === activeAssignment.deviceId && row.kind === "ONT");
-  if (!device) return null;
-
-  return {
-    assignment: activeAssignment,
-    device,
-    telemetry: STATE.ontTelemetryByDeviceId[device.id] ?? null,
-  };
+  return getActiveOntsForSubscriber(subscriberId)[0] ?? null;
 }
